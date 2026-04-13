@@ -10,3 +10,26 @@ make run
 make test
 make fmt
 ```
+
+### Testing
+
+All project tests live under `test/`.
+
+Run the full test suite:
+
+```bash
+go test ./...
+```
+
+Or use the Make target:
+
+```bash
+make test
+```
+
+Run a specific test package:
+
+```bash
+go test ./test/auth
+go test ./test/api
+```
