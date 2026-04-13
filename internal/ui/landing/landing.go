@@ -13,38 +13,19 @@ func NewModel() Model {
 	return Model{}
 }
 
-func (Model) View(th theme.Theme, width int, authenticated bool, workspaceName string) string {
-	title := "Terminal-native insights"
-	lines := []string{
-		"Ask Papermap questions from your terminal.",
-		"Sign in with your Papermap account to continue.",
-	}
-	action := "Press Enter to sign in"
-	keyHint := "Enter sign in  •  Ctrl+C quit"
-
-	if authenticated {
-		if strings.TrimSpace(workspaceName) == "" {
-			workspaceName = "Unified Workspace"
-		}
-
-		title = "Welcome back"
-		lines = []string{
-			"Saved session found.",
-			"Continue into " + workspaceName + ".",
-		}
-		action = "Press Enter to open workspace"
-		keyHint = "Enter continue  •  Ctrl+C quit"
-	}
-
+func (Model) View(th theme.Theme, width int) string {
 	panelWidth := clampWidth(width, 62)
 	panel := th.Panel.Width(panelWidth).Render(strings.Join([]string{
-		th.Title.Render(title),
+		th.Title.Render("Terminal-native insights"),
 		"",
-		th.Body.Render(strings.Join(lines, "\n")),
+		th.Body.Render(strings.Join([]string{
+			"Ask Papermap questions from your terminal.",
+			"Sign in with your Papermap account to continue.",
+		}, "\n")),
 		"",
-		th.Accent.Render(action),
+		th.Accent.Render("Press Enter to sign in"),
 		"",
-		th.KeyHint.Render(keyHint),
+		th.KeyHint.Render("Enter sign in  •  Ctrl+C quit"),
 	}, "\n"))
 
 	return strings.Join([]string{

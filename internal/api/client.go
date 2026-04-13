@@ -45,6 +45,10 @@ func NewClient(baseURL string, httpClient *http.Client, tokenSource TokenSource)
 }
 
 func (c *Client) NewRequest(ctx context.Context, method string, requestPath string, body any) (*http.Request, error) {
+	return c.newRequest(ctx, method, requestPath, body, true)
+}
+
+func (c *Client) newRequest(ctx context.Context, method string, requestPath string, body any, includeAuth bool) (*http.Request, error) {
 	endpoint := *c.baseURL
 	endpoint.Path = path.Join(c.baseURL.Path, requestPath)
 
@@ -67,7 +71,7 @@ func (c *Client) NewRequest(ctx context.Context, method string, requestPath stri
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	if c.tokenSource != nil {
+	if includeAuth && c.tokenSource != nil {
 		token, err := c.tokenSource.AccessToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load access token: %w", err)

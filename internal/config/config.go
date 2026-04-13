@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultAPIURL = "http://localhost:8080"
+	defaultAPIURL = "http://localhost:8000"
 	apiURLEnvKey  = "PAPERMAP_API_URL"
 )
 

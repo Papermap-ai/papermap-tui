@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,10 @@ type startupMsg struct {
 	config        config.Config
 	authenticated bool
 	err           error
+}
+
+type loginResultMsg struct {
+	err string
 }
 
 type Model struct {
@@ -102,7 +107,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.authenticated {
-			m.screen = screenChat
+			m.screen = screenWorkspacePicker
 		}
 		return m, nil
 
@@ -111,7 +116,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case uitauth.SubmitMsg:
+		m.login.SetSubmitting(true)
+		return m, m.initiateLogin(msg)
+
+	case loginResultMsg:
+		if msg.err != "" {
+			m.login.SetError(msg.err)
+			return m, nil
+		}
+
+		m.login.Reset()
+		m.authenticated = true
+		m.screen = screenWorkspacePicker
+		return m, nil
+
 	case tea.KeyPressMsg:
+		if m.screen == screenLogin {
+			if msg.String() == keyQuit {
+				return m, tea.Quit
+			}
+			if msg.String() == keyEscape {
+				return m.handleEscape(), nil
+			}
+
+			updatedLogin, cmd := m.login.Update(msg)
+			m.login = updatedLogin
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case keyQuit:
 			return m, tea.Quit
@@ -179,11 +212,7 @@ func (m Model) handleEscape() Model {
 func (m Model) handleEnter() Model {
 	switch m.screen {
 	case screenLanding:
-		if m.authenticated {
-			m.screen = screenChat
-		} else {
-			m.screen = screenLogin
-		}
+		m.screen = screenLogin
 	case screenWorkspacePicker:
 		m.screen = screenChat
 	}
@@ -200,7 +229,7 @@ func (m Model) viewScreen() string {
 	case screenWorkspacePicker:
 		return m.workspace.View(m.theme, m.width)
 	default:
-		return m.landing.View(m.theme, m.width, m.authenticated, m.workspaceName)
+		return m.landing.View(m.theme, m.width)
 	}
 }
 
@@ -211,4 +240,28 @@ func (m Model) frame(content string) string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
+}
+
+func (m Model) initiateLogin(msg uitauth.SubmitMsg) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return loginResultMsg{err: "API client is not ready yet."}
+		}
+
+		result, err := m.client.Login(context.Background(), msg.Email, msg.Password)
+		if err != nil {
+			return loginResultMsg{err: err.Error()}
+		}
+
+		cred, err := result.ToCredentials(auth.Credentials{})
+		if err != nil {
+			return loginResultMsg{err: err.Error()}
+		}
+
+		if err := m.store.Save(cred); err != nil {
+			return loginResultMsg{err: err.Error()}
+		}
+
+		return loginResultMsg{}
+	}
 }
