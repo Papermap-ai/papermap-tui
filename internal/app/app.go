@@ -200,7 +200,7 @@ func (m Model) viewScreen() string {
 	case screenWorkspacePicker:
 		return m.workspace.View(m.theme, m.width)
 	default:
-		return m.landing.View(m.theme, m.width, m.authenticated)
+		return m.landing.View(m.theme, m.width, m.authenticated, m.workspaceName)
 	}
 }
 

@@ -16,12 +16,12 @@ type Theme struct {
 }
 
 func Default() Theme {
-	accent := lipgloss.Color("#8B5CF6")
-	soft := lipgloss.Color("#A78BFA")
-	muted := lipgloss.Color("#94A3B8")
-	text := lipgloss.Color("#E2E8F0")
-	border := lipgloss.Color("#334155")
-	errorColor := lipgloss.Color("#F87171")
+	accent := lipgloss.Color("#2ED8A3")
+	soft := lipgloss.Color("#7BE7C5")
+	muted := lipgloss.Color("#97A6A8")
+	text := lipgloss.Color("#F2F5F4")
+	border := lipgloss.Color("#23403D")
+	errorColor := lipgloss.Color("#FF7A7A")
 
 	return Theme{
 		App: lipgloss.NewStyle().
