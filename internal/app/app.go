@@ -32,6 +32,7 @@ const (
 type startupMsg struct {
 	config        config.Config
 	authenticated bool
+	client        *api.Client
 	err           error
 }
 
@@ -97,15 +98,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case startupMsg:
 		m.config = msg.config
 		m.authenticated = msg.authenticated
+		m.client = msg.client
 		m.startupErr = msg.err
-		if msg.err == nil {
-			client, err := api.NewClient(msg.config.APIURL, nil, m.store)
-			if err != nil {
-				m.startupErr = err
-			} else {
-				m.client = client
-			}
-		}
 		if m.authenticated {
 			m.screen = screenWorkspacePicker
 		}
@@ -185,16 +179,59 @@ func (m Model) loadStartup() tea.Cmd {
 			return startupMsg{err: err}
 		}
 
-		authenticated := false
-		cred, err := m.store.Load()
-		switch {
-		case err == nil:
-			authenticated = cred.Valid()
-		case err != nil && !errors.Is(err, os.ErrNotExist):
+		client, err := api.NewClient(cfg.APIURL, nil, m.store)
+		if err != nil {
 			return startupMsg{config: cfg, err: err}
 		}
 
-		return startupMsg{config: cfg, authenticated: authenticated}
+		authenticated, err := m.restoreSession(context.Background(), client)
+		if err != nil {
+			return startupMsg{config: cfg, client: client, err: err}
+		}
+
+		return startupMsg{config: cfg, authenticated: authenticated, client: client}
+	}
+}
+
+func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, error) {
+	cred, err := m.store.Load()
+	switch {
+	case err == nil:
+		if cred.Valid() {
+			return true, nil
+		}
+
+		if strings.TrimSpace(cred.RefreshToken) == "" {
+			if err := m.store.Clear(); err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+
+		refreshed, err := client.Refresh(ctx, cred.RefreshToken)
+		if err != nil {
+			if clearErr := m.store.Clear(); clearErr != nil {
+				return false, clearErr
+			}
+			return false, nil
+		}
+
+		updatedCred, err := refreshed.ToCredentials(cred)
+		if err != nil {
+			return false, err
+		}
+
+		if err := m.store.Save(updatedCred); err != nil {
+			return false, err
+		}
+
+		return true, nil
+
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+
+	default:
+		return false, err
 	}
 }
 

@@ -67,10 +67,6 @@ func (s *TokenStore) Load() (Credentials, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.load {
-		return s.cred, nil
-	}
-
 	info, err := os.Stat(s.path)
 	if err != nil {
 		return Credentials{}, err
