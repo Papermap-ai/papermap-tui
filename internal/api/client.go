@@ -48,6 +48,19 @@ func (c *Client) NewRequest(ctx context.Context, method string, requestPath stri
 	return c.newRequest(ctx, method, requestPath, body, true)
 }
 
+func (c *Client) NewRequestWithHeaders(ctx context.Context, method string, requestPath string, body any, headers map[string]string) (*http.Request, error) {
+	req, err := c.newRequest(ctx, method, requestPath, body, true)
+	if err != nil {
+		return nil, err
+	}
+
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	return req, nil
+}
+
 func (c *Client) newRequest(ctx context.Context, method string, requestPath string, body any, includeAuth bool) (*http.Request, error) {
 	endpoint := *c.baseURL
 	endpoint.Path = path.Join(c.baseURL.Path, requestPath)
@@ -88,6 +101,18 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c *Client) DoStream(req *http.Request) (*http.Response, error) {
+	streamClient := *c.httpClient
+	streamClient.Timeout = 0
+
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send stream request: %w", err)
 	}
 
 	return resp, nil
