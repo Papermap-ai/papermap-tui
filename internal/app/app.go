@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -25,6 +26,7 @@ import (
 type screen string
 
 const (
+	screenSplash          screen = "splash"
 	screenLanding         screen = "landing"
 	screenLogin           screen = "login"
 	screenChat            screen = "chat"
@@ -102,6 +104,7 @@ type Model struct {
 	chat             chat.Model
 	workspace        workspace.Model
 	store            *auth.TokenStore
+	spinner          spinner.Model
 }
 
 func Run() error {
@@ -124,20 +127,23 @@ func NewModel() (Model, error) {
 		return Model{}, err
 	}
 
+	th := theme.Default()
+
 	return Model{
-		screen:        screenLanding,
+		screen:        screenSplash,
 		workspaceName: "Unified Workspace",
-		theme:         theme.Default(),
+		theme:         th,
 		landing:       landing.NewModel(),
 		login:         uitauth.NewModel(),
 		chat:          chat.NewModel(),
 		workspace:     workspace.NewModel(),
 		store:         store,
+		spinner:       newSplashSpinner(th),
 	}, nil
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.loadStartup()
+	return tea.Batch(m.loadStartup(), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -153,6 +159,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.user = cred.User
 			}
 			m.screen = screenChat
+		} else {
+			m.screen = screenLanding
+		}
+		return m, nil
+
+	case spinner.TickMsg:
+		if m.screen == screenSplash {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -421,6 +437,8 @@ func (m Model) handleEnter() Model {
 
 func (m Model) viewScreen() string {
 	switch m.screen {
+	case screenSplash:
+		return m.splashView()
 	case screenLogin:
 		return m.login.View(m.theme, m.width)
 	case screenChat:
