@@ -20,7 +20,7 @@ func Logo(th theme.Theme, width int) string {
 // Render renders the block-art PAPERMAP wordmark. If width > 0, the logo
 // is centered within that width.
 func Render(th theme.Theme, width int) string {
-	const spacing = 0
+	const spacing = 1
 
 	paperLetters := []string{
 		letterP(),
@@ -112,17 +112,19 @@ func renderWord(spacing int, letters ...string) string {
 }
 
 // --- Letterforms ---
-// Each letterform is 3 rows tall using Unicode block characters:
+// Each letterform is 3 rows tall using Unicode block characters.
+// Lowercase style: rounded tops (▄) for letters without ascenders,
+// p's stem continues to row 3 as a descender.
 //   █ = full block, ▄ = lower half, ▀ = upper half
 
 func letterP() string {
 	// █▀▀▄
-	// █▀▀
-	// ▀
+	// █▄▄▀
+	// █
 	return join(
-		"█\n█\n▀",
-		"▀▀\n▀▀\n",
-		"▄\n\n",
+		"█\n█\n█",
+		"▀▀\n▄▄\n  ",
+		"▄\n▀\n ",
 	)
 }
 
@@ -138,35 +140,37 @@ func letterA() string {
 }
 
 func letterE() string {
-	// █▀▀▀
+	// ▄▀▀▄
 	// █▀▀
 	// ▀▀▀
 	return join(
-		"█\n█\n▀",
-		"▀▀▀\n▀▀\n▀▀▀",
+		"▄\n█\n▀",
+		"▀▀\n▀▀\n▀▀",
+		"▄\n \n ",
 	)
 }
 
 func letterR() string {
 	// █▀▀▄
-	// █▀▀
-	// ▀  ▀
+	// █
+	// ▀
 	return join(
 		"█\n█\n▀",
-		"▀▀\n▀▀\n  ",
-		"▄\n\n▀",
+		"▀▀\n  \n  ",
+		"▄\n \n ",
 	)
 }
 
 func letterM() string {
-	// █▄▄█
-	// █▀▀█
-	// ▀  ▀
+	// ▄▄ ▄▄
+	// █▀█▀█
+	// ▀ ▀ ▀
 	return join(
-		"█\n█\n▀",
+		"▄\n█\n▀",
 		"▄\n▀\n ",
+		" \n█\n▀",
 		"▄\n▀\n ",
-		"█\n█\n▀",
+		"▄\n█\n▀",
 	)
 }
 
