@@ -19,6 +19,7 @@ type Theme struct {
 	KeyHint    lipgloss.Style
 	Error      lipgloss.Style
 	Accent     lipgloss.Style
+	InputBg    color.Color // Distinct background for the text input area.
 }
 
 func Default() Theme {
@@ -28,6 +29,7 @@ func Default() Theme {
 	text := lipgloss.Color("#F2F5F4")
 	border := lipgloss.Color("#23403D")
 	errorColor := lipgloss.Color("#FF7A7A")
+	inputBg := lipgloss.Color("#11111B")
 
 	return Theme{
 		App: lipgloss.NewStyle().
@@ -58,5 +60,6 @@ func Default() Theme {
 			Bold(true),
 		LogoColorA: accent,
 		LogoColorB: soft,
+		InputBg:    inputBg,
 	}
 }

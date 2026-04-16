@@ -13,7 +13,10 @@ import (
 func TestChatSubmitStartsStreamingTranscript(t *testing.T) {
 	t.Parallel()
 
-	model := chat.NewModel()
+	th := theme.Default()
+	model := chat.NewModel(th)
+
+	// Type "hi" into the textarea.
 	for _, key := range []string{"h", "i"} {
 		updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: []rune(key)[0], Text: key}))
 		model = updated
@@ -34,7 +37,7 @@ func TestChatSubmitStartsStreamingTranscript(t *testing.T) {
 		t.Fatalf("expected prompt hi, got %q", submit.Prompt)
 	}
 
-	view := model.View(theme.Default(), "Unified Workspace", 100)
+	view := model.View(th, "Unified Workspace", 100)
 	if !strings.Contains(view, "YOU") || !strings.Contains(view, "Streaming response") {
 		t.Fatalf("expected optimistic transcript, got %q", view)
 	}
@@ -44,7 +47,7 @@ func TestChatSubmitStartsStreamingTranscript(t *testing.T) {
 
 	model.AppendStreamText("hello")
 	model.CompleteStream()
-	view = model.View(theme.Default(), "Unified Workspace", 100)
+	view = model.View(th, "Unified Workspace", 100)
 	if !strings.Contains(view, "hello") {
 		t.Fatalf("expected streamed content in view, got %q", view)
 	}
@@ -53,7 +56,10 @@ func TestChatSubmitStartsStreamingTranscript(t *testing.T) {
 func TestChatClearRemovesTranscript(t *testing.T) {
 	t.Parallel()
 
-	model := chat.NewModel()
+	th := theme.Default()
+	model := chat.NewModel(th)
+
+	// Type "hi" into the textarea.
 	for _, key := range []string{"h", "i"} {
 		updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: []rune(key)[0], Text: key}))
 		model = updated
@@ -67,11 +73,12 @@ func TestChatClearRemovesTranscript(t *testing.T) {
 	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 'l', Mod: tea.ModCtrl}))
 	model = updated
 
-	view := model.View(theme.Default(), "Unified Workspace", 100)
+	view := model.View(th, "Unified Workspace", 100)
 	if strings.Contains(view, "YOU") {
 		t.Fatalf("expected cleared transcript, got %q", view)
 	}
-	if !strings.Contains(view, "Type a question below") {
-		t.Fatalf("expected empty state after clear, got %q", view)
+	// Empty state now shows the workspace label and textarea placeholder.
+	if !strings.Contains(view, "Workspace: Unified Workspace") {
+		t.Fatalf("expected workspace label in empty state, got %q", view)
 	}
 }
