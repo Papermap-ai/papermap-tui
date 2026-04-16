@@ -203,13 +203,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workspaceLoadedMsg:
 		if msg.err != "" {
-			m.startupErr = errors.New(msg.err)
+			// Workspace load errors are non-fatal - user can still use chat.
 			return m, nil
 		}
 		m.applyWorkspace(msg.workspace)
 		return m, nil
 
 	case chat.SubmitMsg:
+		// Clear startup errors once user is actively using chat.
+		m.startupErr = nil
 		return m, m.startInsight(msg)
 
 	case insightStartedMsg:
@@ -264,7 +266,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case historyLoadedMsg:
 		if msg.err != "" {
-			m.startupErr = errors.New(msg.err)
+			// Don't treat history load errors as fatal - just log and continue.
+			// The user can still use chat even if history failed to load.
 			return m, nil
 		}
 		if len(msg.messages) == 0 && len(msg.fallback) > 0 {
@@ -334,7 +337,10 @@ func (m Model) View() tea.View {
 		}, "\n")
 	}
 
-	return tea.NewView(m.frame(content))
+	v := tea.NewView(m.frame(content))
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeAllMotion
+	return v
 }
 
 func (m Model) loadStartup() tea.Cmd {
@@ -453,6 +459,11 @@ func (m Model) viewScreen() string {
 func (m Model) frame(content string) string {
 	styled := m.theme.App.Render(content)
 	if m.width <= 0 || m.height <= 0 {
+		return styled
+	}
+
+	// For chat screen, don't center - just return styled content to prevent clipping.
+	if m.screen == screenChat {
 		return styled
 	}
 
