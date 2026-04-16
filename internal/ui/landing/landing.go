@@ -29,7 +29,7 @@ func (Model) View(th theme.Theme, width int) string {
 	}, "\n"))
 
 	return strings.Join([]string{
-		components.Logo(th),
+		components.Logo(th, panelWidth),
 		th.Muted.Render("Focused terminal access to Papermap insights."),
 		"",
 		panel,

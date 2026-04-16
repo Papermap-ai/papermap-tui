@@ -1,18 +1,24 @@
 package theme
 
-import "charm.land/lipgloss/v2"
+import (
+	"image/color"
+
+	"charm.land/lipgloss/v2"
+)
 
 type Theme struct {
-	App     lipgloss.Style
-	Logo    lipgloss.Style
-	Panel   lipgloss.Style
-	Title   lipgloss.Style
-	Body    lipgloss.Style
-	Muted   lipgloss.Style
-	Status  lipgloss.Style
-	KeyHint lipgloss.Style
-	Error   lipgloss.Style
-	Accent  lipgloss.Style
+	App        lipgloss.Style
+	Logo       lipgloss.Style
+	LogoColorA color.Color // Primary logo color ("PAPER").
+	LogoColorB color.Color // Secondary logo color ("MAP").
+	Panel      lipgloss.Style
+	Title      lipgloss.Style
+	Body       lipgloss.Style
+	Muted      lipgloss.Style
+	Status     lipgloss.Style
+	KeyHint    lipgloss.Style
+	Error      lipgloss.Style
+	Accent     lipgloss.Style
 }
 
 func Default() Theme {
@@ -50,5 +56,7 @@ func Default() Theme {
 		Accent: lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true),
+		LogoColorA: accent,
+		LogoColorB: soft,
 	}
 }

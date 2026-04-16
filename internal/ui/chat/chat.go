@@ -215,7 +215,7 @@ func (m Model) View(th theme.Theme, workspace string, width int) string {
 		composer,
 	}, "\n"))
 
-	return strings.Join([]string{components.Logo(th), "", body}, "\n")
+	return strings.Join([]string{components.Logo(th, panelWidth), "", body}, "\n")
 }
 
 func (m *Model) beginRequest(prompt string) {
