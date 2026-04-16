@@ -3,8 +3,20 @@ package chat
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/papermap/papermap-tui/internal/theme"
 )
+
+func addLeftBar(barStyle lipgloss.Style, content string) string {
+	bar := barStyle.Render("▎")
+	lines := strings.Split(content, "\n")
+	result := make([]string, len(lines))
+	for i, line := range lines {
+		result[i] = bar + " " + line
+	}
+	return strings.Join(result, "\n")
+}
 
 func renderRichText(th theme.Theme, width int, content string) string {
 	return th.Body.Width(max(width-8, 20)).Render(strings.TrimSpace(content))
