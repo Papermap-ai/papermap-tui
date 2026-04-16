@@ -33,3 +33,4 @@ go.work.sum
 # .vscode/
 PROMPT.md
 Plans/*
+.opencode

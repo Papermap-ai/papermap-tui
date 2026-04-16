@@ -2,8 +2,8 @@ package chat
 
 import (
 	"strings"
-	"unicode/utf8"
 
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -30,17 +30,54 @@ type Message struct {
 type Model struct {
 	width          int
 	height         int
-	prompt         string
+	textarea       textarea.Model
 	messages       []Message
 	streaming      bool
 	err            string
 	chatID         string
 	requestID      string
 	activeResponse int
+	theme          theme.Theme
 }
 
-func NewModel() Model {
-	return Model{activeResponse: -1}
+func NewModel(th theme.Theme) Model {
+	ta := textarea.New()
+	ta.Placeholder = "Send a message..."
+	ta.SetVirtualCursor(true)
+	ta.Focus()
+
+	ta.Prompt = ""
+	ta.SetWidth(30)
+	ta.SetHeight(1)
+	ta.MaxHeight = 3
+	ta.MinHeight = 1
+	ta.DynamicHeight = true
+
+	// Remove cursor line styling like in the example.
+	s := ta.Styles()
+	s.Focused.CursorLine = lipgloss.NewStyle()
+	s.Focused.Base = lipgloss.NewStyle().
+		Background(lipgloss.Color("#11111B")).
+		Foreground(lipgloss.Color("#F2F5F4"))
+	s.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
+	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#97A6A8"))
+
+	s.Blurred = s.Focused
+	ta.SetStyles(s)
+
+	ta.ShowLineNumbers = false
+	ta.KeyMap.InsertNewline.SetEnabled(false)
+
+	return Model{
+		textarea:       ta,
+		activeResponse: -1,
+		theme:          th,
+	}
+}
+
+// Init returns the initial command for the textarea (cursor blink).
+func (m Model) Init() tea.Cmd {
+	return textarea.Blink
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -60,28 +97,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 
-		switch msg.String() {
-		case "backspace":
-			m.prompt = trimLastRune(m.prompt)
-			return m, nil
-		case "enter":
-			prompt := strings.TrimSpace(m.prompt)
+		if msg.String() == "enter" {
+			prompt := strings.TrimSpace(m.textarea.Value())
 			if prompt == "" {
 				m.err = "Enter a question to continue."
 				return m, nil
 			}
-
 			m.beginRequest(prompt)
 			return m, func() tea.Msg { return SubmitMsg{Prompt: prompt} }
 		}
-
-		if msg.Key().Text != "" {
-			m.err = ""
-			m.prompt += msg.Key().Text
-		}
 	}
 
-	return m, nil
+	// Delegate all other messages to the textarea.
+	var cmd tea.Cmd
+	m.textarea, cmd = m.textarea.Update(msg)
+	return m, cmd
 }
 
 func (m *Model) SetStreamingIDs(chatID string, requestID string) {
@@ -177,7 +207,7 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 }
 
 func (m *Model) Clear() {
-	m.prompt = ""
+	m.textarea.Reset()
 	m.messages = nil
 	m.streaming = false
 	m.err = ""
@@ -196,6 +226,61 @@ func (m Model) View(th theme.Theme, workspace string, width int) string {
 	}
 
 	panelWidth := clampWidth(width, 88)
+	innerWidth := panelWidth - 6
+
+	// Workspace label.
+	workspaceLabel := th.Title.Render("Workspace: " + workspace)
+
+	// Render textarea (prompt is built-in, no external accent bar).
+	if innerWidth > 0 {
+		m.textarea.SetWidth(innerWidth)
+	}
+	inputView := m.textarea.View()
+
+	// Key hints.
+	hints := th.KeyHint.Render(
+		"enter: submit  ·  ctrl+l: clear chat  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+	)
+
+	if len(m.messages) == 0 {
+		// Empty state: logo above, then workspace label, textarea, hints — with spacing.
+		logo := components.Logo(th, panelWidth)
+
+		content := lipgloss.JoinVertical(lipgloss.Left,
+			workspaceLabel,
+			"",
+			inputView,
+		)
+
+		// Error line if present.
+		if m.err != "" {
+			content = lipgloss.JoinVertical(lipgloss.Left,
+				content,
+				"",
+				th.Error.Render(m.err),
+			)
+		}
+
+		if m.streaming {
+			content = lipgloss.JoinVertical(lipgloss.Left,
+				content,
+				"",
+				th.Muted.Render("Waiting for stream to finish..."),
+			)
+		}
+
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			content,
+			"",
+			hints,
+		)
+
+		// Join logo and content with more spacing (four blank lines).
+		block := lipgloss.JoinVertical(lipgloss.Left, logo, "", "", "", "", content)
+		return lipgloss.Place(width, m.height, lipgloss.Center, lipgloss.Center, block)
+	}
+
+	// Active chat: transcript + composer at bottom.
 	status := "ready"
 	if m.streaming {
 		status = "streaming"
@@ -205,7 +290,26 @@ func (m Model) View(th theme.Theme, workspace string, width int) string {
 	}
 
 	transcript := m.transcriptView(th, panelWidth)
-	composer := m.composerView(th, panelWidth)
+
+	composer := lipgloss.JoinVertical(lipgloss.Left,
+		workspaceLabel,
+		"",
+		inputView,
+	)
+
+	if m.err != "" {
+		composer = lipgloss.JoinVertical(lipgloss.Left,
+			composer,
+			"",
+			th.Error.Render(m.err),
+		)
+	}
+
+	composer = lipgloss.JoinVertical(lipgloss.Left,
+		composer,
+		"",
+		hints,
+	)
 
 	body := th.Panel.Width(panelWidth).Render(strings.Join([]string{
 		components.StatusBar(th, "workspace: "+workspace, "stream: "+status),
@@ -215,12 +319,13 @@ func (m Model) View(th theme.Theme, workspace string, width int) string {
 		composer,
 	}, "\n"))
 
-	return strings.Join([]string{components.Logo(th, panelWidth), "", body}, "\n")
+	// Return body without logo.
+	return body
 }
 
 func (m *Model) beginRequest(prompt string) {
 	m.err = ""
-	m.prompt = ""
+	m.textarea.Reset()
 	m.streaming = true
 	m.messages = append(m.messages,
 		Message{Role: "you", Content: prompt},
@@ -255,41 +360,6 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-func (m Model) composerView(th theme.Theme, width int) string {
-	prompt := m.prompt
-	if prompt == "" {
-		prompt = th.Muted.Render("Ask Papermap...")
-	}
-
-	lines := []string{
-		th.Title.Render("Prompt"),
-		"",
-		th.Body.Render("> " + prompt),
-	}
-
-	if m.err != "" {
-		lines = append(lines, "", th.Error.Render(m.err))
-	}
-
-	if m.streaming {
-		lines = append(
-			lines,
-			"",
-			th.Muted.Render("Waiting for current stream to finish before sending another prompt."),
-		)
-	}
-
-	lines = append(
-		lines,
-		"",
-		th.KeyHint.Render(
-			"Enter submit  •  Ctrl+L clear chat  •  Ctrl+W switch workspace  •  Ctrl+C quit",
-		),
-	)
-
-	return lipgloss.NewStyle().MaxWidth(width - 8).Render(strings.Join(lines, "\n"))
-}
-
 func renderMessage(th theme.Theme, width int, message Message) string {
 	roleStyle := th.Accent
 	if message.Role == "you" {
@@ -311,19 +381,6 @@ func renderMessage(th theme.Theme, width int, message Message) string {
 	}
 
 	return strings.Join(parts, "\n")
-}
-
-func trimLastRune(value string) string {
-	if value == "" {
-		return value
-	}
-
-	_, size := utf8.DecodeLastRuneInString(value)
-	if size <= 0 {
-		return ""
-	}
-
-	return value[:len(value)-size]
 }
 
 func clampWidth(width int, fallback int) int {

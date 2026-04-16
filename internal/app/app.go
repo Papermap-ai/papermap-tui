@@ -135,7 +135,7 @@ func NewModel() (Model, error) {
 		theme:         th,
 		landing:       landing.NewModel(),
 		login:         uitauth.NewModel(),
-		chat:          chat.NewModel(),
+		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
 		store:         store,
 		spinner:       newSplashSpinner(th),
@@ -143,7 +143,7 @@ func NewModel() (Model, error) {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadStartup(), m.spinner.Tick)
+	return tea.Batch(m.loadStartup(), m.spinner.Tick, m.chat.Init())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
