@@ -51,19 +51,27 @@ func NewModel(th theme.Theme) Model {
 
 	ta.Prompt = ""
 	ta.SetWidth(30)
-	ta.SetHeight(1)
-	ta.MaxHeight = 3
-	ta.MinHeight = 1
+	ta.SetHeight(2)
+	ta.MaxHeight = 5
+	ta.MinHeight = 2
 	ta.DynamicHeight = true
 
-	// Remove cursor line styling like in the example.
 	s := ta.Styles()
-	s.Focused.CursorLine = lipgloss.NewStyle()
+	inputBg := lipgloss.Color("#11111B")
+	s.Focused.CursorLine = lipgloss.NewStyle().Background(inputBg)
 	s.Focused.Base = lipgloss.NewStyle().
-		Background(lipgloss.Color("#11111B")).
+		Background(inputBg).
 		Foreground(lipgloss.Color("#F2F5F4"))
-	s.Focused.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
-	s.Focused.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#97A6A8"))
+	s.Focused.Text = lipgloss.NewStyle().
+		Background(inputBg).
+		Foreground(lipgloss.Color("#F2F5F4"))
+	s.Focused.EndOfBuffer = lipgloss.NewStyle().Background(inputBg)
+	s.Focused.Prompt = lipgloss.NewStyle().
+		Background(inputBg).
+		Foreground(lipgloss.Color("#2ED8A3"))
+	s.Focused.Placeholder = lipgloss.NewStyle().
+		Background(inputBg).
+		Foreground(lipgloss.Color("#97A6A8"))
 
 	s.Blurred = s.Focused
 	ta.SetStyles(s)
@@ -307,9 +315,11 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 	workspaceLabel := th.Title.Render("Workspace: " + workspace)
 
 	if innerWidth > 0 {
-		m.textarea.SetWidth(innerWidth)
+		m.textarea.SetWidth(max(innerWidth-2, 10))
 	}
-	inputView := m.textarea.View()
+	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
+	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
+	inputView := addLeftBar(th.Accent, taView)
 
 	hints := th.KeyHint.Render(
 		"enter: submit  ·  ctrl+l: clear chat  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
@@ -359,7 +369,9 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	)
 
 	// Input area.
-	inputView := m.textarea.View()
+	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
+	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
+	inputView := addLeftBar(th.Accent, taView)
 
 	// Assemble: header, viewport, input, error (if any), hints.
 	sections := []string{
@@ -485,8 +497,10 @@ func (m *Model) updateViewportDimensions() {
 	hintsHeight := lipgloss.Height(hints)
 
 	// Calculate input height.
-	m.textarea.SetWidth(width - 4)
-	inputView := m.textarea.View()
+	m.textarea.SetWidth(max(width-4-2, 10))
+	bgStyle := lipgloss.NewStyle().Background(m.theme.InputBg)
+	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
+	inputView := addLeftBar(m.theme.Accent, taView)
 	inputHeight := lipgloss.Height(inputView)
 
 	// Calculate error height if present.
