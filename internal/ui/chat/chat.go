@@ -37,6 +37,7 @@ type Model struct {
 	spinner          spinner.Model
 	messages         []Message
 	streaming        bool
+	streamStatus     string
 	err              string
 	chatID           string
 	requestID        string
@@ -226,6 +227,17 @@ func (m *Model) SetStreamingIDs(chatID string, requestID string) {
 	}
 }
 
+// SetStreamStatus sets the ephemeral status line shown alongside the spinner
+// while an insight request is in flight. Pass an empty string to clear.
+func (m *Model) SetStreamStatus(status string) {
+	next := strings.TrimSpace(status)
+	if next == m.streamStatus {
+		return
+	}
+	m.streamStatus = next
+	m.syncViewportContent()
+}
+
 func (m *Model) AppendStreamText(text string) {
 	if strings.TrimSpace(text) == "" && text == "" {
 		return
@@ -256,6 +268,7 @@ func (m *Model) SetStreamTable(table *Table) {
 
 func (m *Model) CompleteStream() {
 	m.streaming = false
+	m.streamStatus = ""
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) &&
 		strings.TrimSpace(m.messages[m.activeResponse].Content) == "" &&
 		m.messages[m.activeResponse].Table == nil {
@@ -271,6 +284,7 @@ func (m *Model) CompleteStream() {
 
 func (m *Model) FailStream(err string) {
 	m.streaming = false
+	m.streamStatus = ""
 	m.err = strings.TrimSpace(err)
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
 		if strings.TrimSpace(m.messages[m.activeResponse].Content) == "" {
@@ -329,6 +343,7 @@ func (m *Model) Clear() {
 	m.textarea.Reset()
 	m.messages = nil
 	m.streaming = false
+	m.streamStatus = ""
 	m.err = ""
 	m.chatID = ""
 	m.requestID = ""
@@ -478,15 +493,22 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 	}
 
 	spinnerFrame := m.spinner.View()
+	status := m.streamStatus
 	blocks := make([]string, 0, len(m.messages))
-	for _, message := range m.messages {
-		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame))
+	for i, message := range m.messages {
+		// Only show the live status line on the active pending assistant
+		// slot. All other messages render normally.
+		msgStatus := ""
+		if i == m.activeResponse && message.Pending {
+			msgStatus = status
+		}
+		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame, msgStatus))
 	}
 
 	return strings.Join(blocks, "\n\n")
 }
 
-func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string) string {
+func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string) string {
 	roleStyle := th.Accent
 	barColor := th.Accent
 	if message.Role == "you" {
@@ -496,7 +518,11 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	body := strings.TrimSpace(message.Content)
 	if body == "" && message.Pending {
-		body = th.Muted.Render(spinnerFrame + " Thinking...")
+		label := "Thinking..."
+		if strings.TrimSpace(status) != "" {
+			label = strings.TrimSpace(status)
+		}
+		body = th.Muted.Render(spinnerFrame + " " + label)
 	} else if body == "" {
 		body = th.Muted.Render("No content.")
 	} else {

@@ -58,15 +58,19 @@ func TestStartInsightAndStream(t *testing.T) {
 				t.Fatalf("decode stream request: %v", err)
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
+			// Real backend emits progress events (phase_update, agent_thought,
+			// tool_*) plus a final `complete` sentinel. The client should
+			// extract phase/message for phase_update and detect done on
+			// complete. No SSE event carries the final answer text.
 			_, _ = io.WriteString(w, strings.Join([]string{
-				"event: chunk",
-				`data: {"type":"chunk","text":"hello ","request_id":"req-123","chat_id":"chat-123"}`,
+				"event: phase_update",
+				`data: {"type":"phase_update","phase":"analyzing","message":"Analyzing data...","request_id":"req-123","chat_id":"chat-123"}`,
 				"",
-				"event: chunk",
-				`data: {"type":"chunk","text":"world","request_id":"req-123","chat_id":"chat-123"}`,
+				"event: agent_thought",
+				`data: {"type":"agent_thought","content":"thinking...","is_complete":false,"request_id":"req-123","chat_id":"chat-123"}`,
 				"",
-				"event: done",
-				`data: {"type":"done","request_id":"req-123","chat_id":"chat-123","done":true}`,
+				"event: complete",
+				`data: {"type":"complete","status":"success","request_id":"req-123","chat_id":"chat-123"}`,
 				"",
 			}, "\n"))
 		default:
@@ -103,16 +107,18 @@ func TestStartInsightAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Next returned error: %v", err)
 	}
-	if first.Text != "hello " {
-		t.Fatalf("unexpected first chunk: %+v", first)
+	if first.Type != "phase_update" || first.Phase != "analyzing" || first.Message != "Analyzing data..." {
+		t.Fatalf("unexpected first event: %+v", first)
 	}
 
 	second, err := stream.Next()
 	if err != nil {
 		t.Fatalf("second Next returned error: %v", err)
 	}
-	if second.Text != "world" {
-		t.Fatalf("unexpected second chunk: %+v", second)
+	// agent_thought carries reasoning; the client deliberately does NOT
+	// surface its content as text.
+	if second.Type != "agent_thought" || second.Message != "" {
+		t.Fatalf("unexpected second event: %+v", second)
 	}
 
 	third, err := stream.Next()
