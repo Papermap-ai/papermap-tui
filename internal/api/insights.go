@@ -90,12 +90,12 @@ type InsightMessage struct {
 
 type InsightStreamEvent struct {
 	Type      string
-	Text      string
+	Phase     string
+	Message   string
 	Error     string
 	Done      bool
 	RequestID string
 	ChatID    string
-	Table     *InsightTable
 	Raw       map[string]any
 }
 
@@ -357,7 +357,7 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 		typeName := firstString(strings.TrimSpace(eventName), "message")
-		return InsightStreamEvent{Type: typeName, Text: payload}, true, nil
+		return InsightStreamEvent{Type: typeName, Message: payload}, true, nil
 	}
 
 	typeName := strings.ToLower(firstString(
@@ -367,18 +367,6 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 		lookupNestedString(raw, "data", "event"),
 		lookupNestedString(raw, "data", "type"),
 	))
-
-	text := firstRawString(
-		lookupRawString(raw, "text"),
-		lookupRawString(raw, "content"),
-		lookupRawString(raw, "chunk"),
-		lookupRawString(raw, "delta"),
-		lookupNestedRawString(raw, "data", "text"),
-		lookupNestedRawString(raw, "data", "content"),
-		lookupNestedRawString(raw, "data", "chunk"),
-		lookupNestedRawString(raw, "payload", "text"),
-		lookupNestedRawString(raw, "payload", "content"),
-	)
 
 	errorText := firstString(
 		lookupString(raw, "error"),
@@ -390,14 +378,30 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 		errorText = firstString(lookupString(raw, "message"), lookupNestedString(raw, "data", "message"))
 	}
 
+	// Extract phase/message for progress-only events (phase_update). Note: we
+	// deliberately do NOT pull `content` from agent_thought, tool_output, or
+	// other reasoning events - those are the model's thinking, not the final
+	// answer. The final answer is returned from the /charts/stream HTTP body.
+	phase := firstString(
+		lookupString(raw, "phase"),
+		lookupNestedString(raw, "data", "phase"),
+	)
+	message := ""
+	if typeName == "phase_update" {
+		message = firstRawString(
+			lookupRawString(raw, "message"),
+			lookupNestedRawString(raw, "data", "message"),
+		)
+	}
+
 	event := InsightStreamEvent{
 		Type:      firstString(typeName, "message"),
-		Text:      text,
+		Phase:     phase,
+		Message:   message,
 		Error:     errorText,
 		Done:      done,
 		RequestID: firstString(lookupString(raw, "request_id"), lookupNestedString(raw, "data", "request_id"), lookupNestedString(raw, "meta", "request_id")),
 		ChatID:    firstString(lookupString(raw, "chat_id"), lookupNestedString(raw, "data", "chat_id"), lookupNestedString(raw, "meta", "chat_id")),
-		Table:     extractTable(raw),
 		Raw:       raw,
 	}
 
@@ -406,6 +410,13 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 	}
 
 	return event, true, nil
+}
+
+// ExtractTable returns a table parsed from an arbitrary response map if one
+// can be found. Exported so app/UI layers can reuse the same detection logic
+// against HTTP response bodies.
+func ExtractTable(raw map[string]any) *InsightTable {
+	return extractTable(raw)
 }
 
 func extractTable(raw map[string]any) *InsightTable {

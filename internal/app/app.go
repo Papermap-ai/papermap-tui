@@ -61,6 +61,15 @@ type insightStartedMsg struct {
 	err       string
 }
 
+// insightHTTPResultMsg carries the final answer body from POST
+// /api/v1/analytics/charts/stream. This is the authoritative final response;
+// SSE events are progress-only and never carry the final text.
+type insightHTTPResultMsg struct {
+	requestID string
+	response  *api.InsightResponse
+	err       string
+}
+
 type startInsightResult struct {
 	chatID    string
 	requestID string
@@ -71,8 +80,8 @@ type startInsightResult struct {
 type insightChunkMsg struct {
 	chatID    string
 	requestID string
-	text      string
-	table     *chat.Table
+	phase     string
+	status    string
 	fallback  []chat.Message
 	done      bool
 	err       string
@@ -106,8 +115,10 @@ type Model struct {
 	client           *api.Client
 	stream           *api.InsightStream
 	fallback         []chat.Message
-	bufferedText     string
-	bufferedTable    *chat.Table
+	pendingResponse  *api.InsightResponse
+	pendingRequestID string
+	httpReceived     bool
+	sseComplete      bool
 	theme            theme.Theme
 	landing          landing.Model
 	login            uitauth.Model
@@ -214,9 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyWorkspace(msg.workspace)
 		m.screen = screenChat
 		m.closeStream()
-		m.fallback = nil
-		m.bufferedText = ""
-		m.bufferedTable = nil
+		m.resetInsightState()
 		m.chat.Clear()
 		return m, nil
 
@@ -233,6 +242,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.startupErr = nil
 		return m, m.startInsight(msg)
 
+	case insightStartPair:
+		// Dispatch the SSE startup outcome through the normal handler and
+		// kick off the HTTP-result waiter in parallel.
+		newModel, startCmd := m.Update(msg.started)
+		httpCmd := awaitInsightHTTPResult(msg.httpResult)
+		return newModel, tea.Batch(startCmd, httpCmd)
+
 	case insightStartedMsg:
 		if msg.err != "" {
 			m.chat.FailStream(msg.err)
@@ -241,70 +257,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.stream = msg.stream
 		m.fallback = msg.fallback
-		m.bufferedText = ""
-		m.bufferedTable = nil
+		m.pendingRequestID = msg.requestID
+		m.httpReceived = false
+		m.sseComplete = false
+		m.pendingResponse = nil
 		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
 		if msg.stream == nil {
-			if msg.response != nil {
-				if len(msg.fallback) > 0 {
-					m.chat.ReplaceLastAssistant(msg.fallback)
-				} else {
-					m.chat.CompleteStream()
-				}
-			}
-			m.fallback = nil
+			// No SSE stream available (opening failed silently upstream, or
+			// we received the response synchronously). Fall back to awaiting
+			// just the HTTP result.
+			m.sseComplete = true
 			return m, nil
 		}
 		return m, m.continueInsightStream()
 
+	case insightHTTPResultMsg:
+		if msg.err != "" {
+			m.closeStream()
+			m.resetInsightState()
+			m.chat.FailStream(msg.err)
+			return m, nil
+		}
+		// Ignore stale results from a previous request.
+		if msg.requestID != "" && m.pendingRequestID != "" && msg.requestID != m.pendingRequestID {
+			return m, nil
+		}
+		m.pendingResponse = msg.response
+		m.httpReceived = true
+		return m.tryFinalizeInsight()
+
 	case insightChunkMsg:
 		if msg.err != "" {
 			m.closeStream()
-			m.bufferedText = ""
-			m.bufferedTable = nil
+			m.resetInsightState()
 			m.chat.FailStream(msg.err)
 			return m, nil
 		}
 
 		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
 
-		// Buffer chunks silently until the stream completes. No partial render.
-		if msg.table != nil {
-			m.bufferedTable = msg.table
-		}
-		if msg.text != "" {
-			m.bufferedText += msg.text
+		// SSE events are progress-only. Surface phase_update messages as a
+		// lightweight status line; ignore agent_thought and tool events.
+		if strings.TrimSpace(msg.status) != "" {
+			m.chat.SetStreamStatus(msg.status)
 		}
 
 		if !msg.done {
 			return m, m.continueInsightStream()
 		}
 
+		// `complete` sentinel received. Close the SSE, then finalize if the
+		// HTTP body has also arrived.
 		m.closeStream()
-
-		bufferedContent := m.bufferedText
-		bufferedTable := m.bufferedTable
-		m.bufferedText = ""
-		m.bufferedTable = nil
-
-		if strings.TrimSpace(bufferedContent) != "" || bufferedTable != nil {
-			m.chat.ReplaceLastAssistant([]chat.Message{{
-				Role:    "alan",
-				Content: strings.TrimSpace(bufferedContent),
-				Table:   bufferedTable,
-			}})
-		} else {
-			m.chat.CompleteStream()
-		}
-
-		if chatID := m.chat.ChatID(); chatID != "" {
-			return m, m.loadConversationHistory(chatID, msg.fallback)
-		}
-		if len(msg.fallback) > 0 {
-			m.chat.ReplaceLastAssistant(msg.fallback)
-		}
-		m.fallback = nil
-		return m, nil
+		m.sseComplete = true
+		return m.tryFinalizeInsight()
 
 	case historyLoadedMsg:
 		if msg.err != "" {
@@ -326,9 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionExpiredMsg:
 		m.closeStream()
-		m.fallback = nil
-		m.bufferedText = ""
-		m.bufferedTable = nil
+		m.resetInsightState()
 		m.authenticated = false
 		m.user = auth.User{}
 		_ = m.store.Clear()
@@ -383,9 +387,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case keyClearChat:
 			m.closeStream()
-			m.fallback = nil
-			m.bufferedText = ""
-			m.bufferedTable = nil
+			m.resetInsightState()
 			m.chat.Clear()
 			return m, nil
 		}
@@ -637,11 +639,19 @@ func (m Model) initiateLogin(msg uitauth.SubmitMsg) tea.Cmd {
 }
 
 func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
-	return func() tea.Msg {
-		if m.client == nil {
+	if m.client == nil {
+		return func() tea.Msg {
 			return insightStartedMsg{err: "API client is not ready yet."}
 		}
+	}
 
+	// Resolve chatID (possibly creating a new chat), build the request, then
+	// fan out two parallel commands:
+	//   1. Fire the HTTP POST /charts/stream and deliver its final response.
+	//   2. Subscribe to the SSE progress stream for the same request_id.
+	// Both have to share a single request_id, so we do the prep work in the
+	// outer closure and return a tea.Batch of both commands.
+	return func() tea.Msg {
 		chatID := m.chat.ChatID()
 		if chatID == "" && strings.TrimSpace(m.defaultDashboard) != "" {
 			created, err := m.client.CreateChat(context.Background(), api.ChatCreateRequest{
@@ -670,33 +680,64 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 			InteractionSource:       "user_query",
 		}
 
-		resultCh := make(chan startInsightResult, 1)
-
+		// HTTP call runs in a goroutine so its result can be picked up by a
+		// dedicated tea.Cmd below. Buffered so the goroutine never blocks.
+		httpResult := make(chan insightHTTPResultMsg, 1)
+		client := m.client
 		go func() {
-			_, _ = m.client.StartInsight(context.Background(), request)
+			response, err := client.StartInsight(context.Background(), request)
+			if err != nil {
+				if expired, ok := sessionExpiredFromError(err); ok {
+					// Surface session-expiry by setting an error so the UI
+					// routes through sessionExpiredFromError at receive time.
+					_ = expired
+					httpResult <- insightHTTPResultMsg{requestID: requestID, err: err.Error()}
+					return
+				}
+				httpResult <- insightHTTPResultMsg{requestID: requestID, err: err.Error()}
+				return
+			}
+			httpResult <- insightHTTPResultMsg{requestID: requestID, response: &response}
 		}()
 
-		go func() {
-			resultCh <- startInsightWithRetry(m.client, chatID, requestID)
-		}()
-
-		result := <-resultCh
-		if result.err != nil {
-			if expired, ok := sessionExpiredFromError(result.err); ok {
-				return expired
-			}
-			return insightStartedMsg{
-				chatID:    result.chatID,
-				requestID: result.requestID,
-				err:       result.err.Error(),
-			}
-		}
-
-		return insightStartedMsg{
+		// Open the SSE subscription with a small retry loop. This must race
+		// with the HTTP call so the request_id is already registered.
+		result := startInsightWithRetry(m.client, chatID, requestID)
+		started := insightStartedMsg{
 			chatID:    result.chatID,
 			requestID: result.requestID,
 			stream:    result.stream,
 		}
+		if result.err != nil {
+			if expired, ok := sessionExpiredFromError(result.err); ok {
+				// Drain the HTTP goroutine so it doesn't leak, then route to
+				// session-expired.
+				go func() { <-httpResult }()
+				return expired
+			}
+			started.err = result.err.Error()
+		}
+
+		// Return a composite message carrying the started event plus a
+		// follow-up command that awaits the HTTP body.
+		return insightStartPair{
+			started:    started,
+			httpResult: httpResult,
+		}
+	}
+}
+
+// insightStartPair is an internal message used to hand off both the SSE
+// startup outcome and a channel that will deliver the HTTP response once it
+// resolves. The Update handler splits this into the two real messages.
+type insightStartPair struct {
+	started    insightStartedMsg
+	httpResult <-chan insightHTTPResultMsg
+}
+
+func awaitInsightHTTPResult(ch <-chan insightHTTPResultMsg) tea.Cmd {
+	return func() tea.Msg {
+		return <-ch
 	}
 }
 
@@ -793,13 +834,11 @@ func (m Model) continueInsightStream() tea.Cmd {
 		}
 
 		event, err := m.stream.Next()
-		table := toChatTable(event.Table)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return insightChunkMsg{
 					chatID:    event.ChatID,
 					requestID: event.RequestID,
-					table:     table,
 					done:      true,
 				}
 			}
@@ -813,13 +852,41 @@ func (m Model) continueInsightStream() tea.Cmd {
 			return insightChunkMsg{err: event.Error}
 		}
 
+		// Translate progress events into a status line. Ignore thinking and
+		// tool events entirely - they carry no user-facing final output.
+		status := ""
+		switch event.Type {
+		case "phase_update":
+			status = strings.TrimSpace(event.Message)
+			if status == "" {
+				status = humanizePhase(event.Phase)
+			}
+		}
+
 		return insightChunkMsg{
 			chatID:    event.ChatID,
 			requestID: event.RequestID,
-			text:      event.Text,
-			table:     table,
+			phase:     event.Phase,
+			status:    status,
 			done:      event.Done,
 		}
+	}
+}
+
+func humanizePhase(phase string) string {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "initializing":
+		return "Initializing..."
+	case "preparing":
+		return "Preparing..."
+	case "analyzing":
+		return "Analyzing..."
+	case "executing":
+		return "Running analysis..."
+	case "finalizing":
+		return "Finalizing..."
+	default:
+		return ""
 	}
 }
 
@@ -926,6 +993,78 @@ func (m *Model) closeStream() {
 	}
 	_ = m.stream.Close()
 	m.stream = nil
+}
+
+// resetInsightState clears per-request buffers and coordination flags. Call
+// on any path that tears down an in-flight insight (error, clear, logout,
+// session expiry, completion).
+func (m *Model) resetInsightState() {
+	m.fallback = nil
+	m.pendingResponse = nil
+	m.pendingRequestID = ""
+	m.httpReceived = false
+	m.sseComplete = false
+}
+
+// tryFinalizeInsight renders the final assistant message once BOTH the HTTP
+// body (the only source of the final answer) and the SSE `complete` sentinel
+// have arrived. If either is still pending, it returns without rendering.
+func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
+	if !m.httpReceived || !m.sseComplete {
+		return m, nil
+	}
+
+	response := m.pendingResponse
+	fallback := m.fallback
+	chatID := strings.TrimSpace(m.chat.ChatID())
+	m.resetInsightState()
+	m.chat.SetStreamStatus("")
+
+	if response != nil {
+		content := strings.TrimSpace(response.TextResponse)
+		if content == "" {
+			content = strings.TrimSpace(response.Thoughts)
+		}
+		table := toChatTable(extractTableFromResponse(response))
+		if content != "" || table != nil {
+			m.chat.ReplaceLastAssistant([]chat.Message{{
+				Role:    "alan",
+				Content: content,
+				Table:   table,
+			}})
+		} else {
+			m.chat.CompleteStream()
+		}
+	} else {
+		m.chat.CompleteStream()
+	}
+
+	// Conversation history refresh still provides the authoritative record
+	// of the exchange (e.g. chart thumbnails, server-side post-processing).
+	if chatID != "" {
+		return m, m.loadConversationHistory(chatID, fallback)
+	}
+	if len(fallback) > 0 {
+		m.chat.ReplaceLastAssistant(fallback)
+	}
+	return m, nil
+}
+
+// extractTableFromResponse pulls a table out of the HTTP response payload if
+// one is present in the raw JSON. The Data field on InsightResponse is a free
+// `any` whose shape varies, so we delegate to the existing extractor over the
+// raw map.
+func extractTableFromResponse(response *api.InsightResponse) *api.InsightTable {
+	if response == nil || response.Raw == nil {
+		return nil
+	}
+	return extractTableRaw(response.Raw)
+}
+
+// extractTableRaw is a thin local alias around api.ExtractTable so callers in
+// this file read consistently.
+func extractTableRaw(raw map[string]any) *api.InsightTable {
+	return api.ExtractTable(raw)
 }
 
 // sessionExpiredFromError checks if err is an auth.ErrSessionExpired and, if
