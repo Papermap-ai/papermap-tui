@@ -3,6 +3,6 @@
 - [x] Add a new papermap logo and edit first screen view with it
 - [x] Figure out how to prevent scrolling when you're in the papermap application
 - [x] Figure out how to place the question prompt at the bottom of the screen
-- [ ] Add a dialog box when you quit for the user to confirm that they want to quit
+- [x] Add a dialog box when you quit for the user to confirm that they want to quit
 - [ ] Figure out how to have it such that the answers show up as scrollabele text
 - [ ] Figure out how to display different tables and types like that when the results are loaded from the API
