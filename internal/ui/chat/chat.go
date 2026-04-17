@@ -3,6 +3,7 @@ package chat
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -33,6 +34,7 @@ type Model struct {
 	height           int
 	textarea         textarea.Model
 	viewport         viewport.Model
+	spinner          spinner.Model
 	messages         []Message
 	streaming        bool
 	err              string
@@ -41,6 +43,7 @@ type Model struct {
 	activeResponse   int
 	theme            theme.Theme
 	contentNeedsSync bool
+	lastTAHeight     int
 }
 
 func NewModel(th theme.Theme) Model {
@@ -83,9 +86,14 @@ func NewModel(th theme.Theme) Model {
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 3
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
+
 	return Model{
 		textarea:       ta,
 		viewport:       vp,
+		spinner:        sp,
 		activeResponse: -1,
 		theme:          th,
 	}
@@ -93,23 +101,31 @@ func NewModel(th theme.Theme) Model {
 
 // Init returns the initial command for the textarea (cursor blink) and viewport.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.viewport.Init())
+	return tea.Batch(textarea.Blink, m.viewport.Init(), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		if m.streaming {
+			m.syncViewportContent()
+		}
+		return m, cmd
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.contentNeedsSync = true
 		m.updateViewportDimensions()
+		m.syncViewportContent()
+		m.scrollToBottom()
 		return m, nil
 
 	case tea.MouseWheelMsg:
 		// Route mouse wheel directly to viewport when we have messages.
-		// Skip content sync check for smooth scrolling.
 		if len(m.messages) > 0 {
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
@@ -118,7 +134,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		// Route all mouse events to viewport when we have messages for smooth interaction.
 		if len(m.messages) > 0 {
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
@@ -126,46 +141,62 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, vpCmd
 			}
 		}
-		// Fall through to delegate to textarea for input area clicks.
 
 	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+l" {
-			m.Clear()
-			m.contentNeedsSync = true
-			return m, nil
-		}
+		key := msg.String()
 
-		if m.streaming {
+		// Scroll keys should always work, even while streaming. Arrow-based
+		// bindings use Shift to avoid conflicting with textarea cursor nav.
+		switch key {
+		case "shift+up":
+			m.viewport.ScrollUp(1)
 			return m, nil
-		}
-
-		// Handle scroll keys - route to viewport when not editing multi-line input.
-		switch msg.String() {
-		case "pgup":
+		case "shift+down":
+			m.viewport.ScrollDown(1)
+			return m, nil
+		case "pgup", "shift+pgup":
 			m.viewport.PageUp()
 			return m, nil
-		case "pgdown":
+		case "pgdown", "shift+pgdown":
 			m.viewport.PageDown()
+			return m, nil
+		case "home", "shift+home":
+			m.viewport.GotoTop()
+			return m, nil
+		case "end", "shift+end":
+			m.viewport.GotoBottom()
+			return m, nil
+		case "ctrl+u":
+			m.viewport.HalfPageUp()
+			return m, nil
+		case "ctrl+d":
+			m.viewport.HalfPageDown()
 			return m, nil
 		}
 
-		if msg.String() == "enter" {
+		if key == "ctrl+l" {
+			m.Clear()
+			return m, nil
+		}
+
+		// Only block submit while streaming; other input still flows.
+		if key == "enter" {
+			if m.streaming {
+				return m, nil
+			}
 			prompt := strings.TrimSpace(m.textarea.Value())
 			if prompt == "" {
 				m.err = "Enter a question to continue."
 				m.updateViewportDimensions()
+				m.syncViewportContent()
 				return m, nil
 			}
 			m.beginRequest(prompt)
-			m.contentNeedsSync = true
-			m.syncViewportContent()
-			return m, func() tea.Msg { return SubmitMsg{Prompt: prompt} }
+			return m, tea.Batch(
+				func() tea.Msg { return SubmitMsg{Prompt: prompt} },
+				m.spinner.Tick,
+			)
 		}
-	}
-
-	// Update viewport content if needed.
-	if m.contentNeedsSync {
-		m.syncViewportContent()
 	}
 
 	// Delegate to textarea for typing.
@@ -173,6 +204,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	m.textarea, taCmd = m.textarea.Update(msg)
 	if taCmd != nil {
 		cmds = append(cmds, taCmd)
+	}
+
+	// If the textarea height changed, recompute viewport dimensions so it
+	// doesn't overlap the input area.
+	if h := m.textarea.Height(); h != m.lastTAHeight {
+		m.lastTAHeight = h
+		m.updateViewportDimensions()
+		m.syncViewportContent()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -200,7 +239,7 @@ func (m *Model) AppendStreamText(text string) {
 		m.err = ""
 		m.updateViewportDimensions()
 	}
-	m.contentNeedsSync = true
+	m.syncViewportContent()
 	m.scrollToBottom()
 }
 
@@ -211,7 +250,7 @@ func (m *Model) SetStreamTable(table *Table) {
 	m.ensureAssistantSlot()
 	m.messages[m.activeResponse].Table = table
 	m.messages[m.activeResponse].Pending = false
-	m.contentNeedsSync = true
+	m.syncViewportContent()
 	m.scrollToBottom()
 }
 
@@ -226,6 +265,8 @@ func (m *Model) CompleteStream() {
 		m.messages[m.activeResponse].Pending = false
 	}
 	m.activeResponse = -1
+	m.syncViewportContent()
+	m.scrollToBottom()
 }
 
 func (m *Model) FailStream(err string) {
@@ -238,6 +279,9 @@ func (m *Model) FailStream(err string) {
 		m.messages[m.activeResponse].Pending = false
 	}
 	m.activeResponse = -1
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
 }
 
 func (m *Model) ReplaceHistory(messages []Message) {
@@ -248,7 +292,9 @@ func (m *Model) ReplaceHistory(messages []Message) {
 	for i := range m.messages {
 		m.messages[i].Pending = false
 	}
-	m.contentNeedsSync = true
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
 }
 
 func (m *Model) ReplaceLastAssistant(messages []Message) {
@@ -274,7 +320,9 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 	m.streaming = false
 	m.err = ""
 	m.activeResponse = -1
-	m.contentNeedsSync = true
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
 }
 
 func (m *Model) Clear() {
@@ -285,7 +333,9 @@ func (m *Model) Clear() {
 	m.chatID = ""
 	m.requestID = ""
 	m.activeResponse = -1
-	m.contentNeedsSync = true
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
 }
 
 func (m Model) ChatID() string {
@@ -365,7 +415,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 
 	// Key hints.
 	hints := th.KeyHint.Render(
-		"enter: submit  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
+		"enter: submit  ·  shift+↑↓: scroll  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
 	)
 
 	// Input area.
@@ -400,7 +450,8 @@ func (m *Model) beginRequest(prompt string) {
 		Message{Role: "alan", Pending: true},
 	)
 	m.activeResponse = len(m.messages) - 1
-	m.contentNeedsSync = true
+	m.updateViewportDimensions()
+	m.syncViewportContent()
 	m.scrollToBottom()
 }
 
@@ -422,15 +473,16 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 		}, "\n")
 	}
 
+	spinnerFrame := m.spinner.View()
 	blocks := make([]string, 0, len(m.messages))
 	for _, message := range m.messages {
-		blocks = append(blocks, renderMessage(th, width, message))
+		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame))
 	}
 
 	return strings.Join(blocks, "\n\n")
 }
 
-func renderMessage(th theme.Theme, width int, message Message) string {
+func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string) string {
 	roleStyle := th.Accent
 	barColor := th.Accent
 	if message.Role == "you" {
@@ -440,7 +492,7 @@ func renderMessage(th theme.Theme, width int, message Message) string {
 
 	body := strings.TrimSpace(message.Content)
 	if body == "" && message.Pending {
-		body = th.Muted.Render("Streaming response...")
+		body = th.Muted.Render(spinnerFrame + " Thinking...")
 	} else if body == "" {
 		body = th.Muted.Render("No content.")
 	} else {
@@ -492,7 +544,7 @@ func (m *Model) updateViewportDimensions() {
 
 	// Calculate hints height.
 	hints := m.theme.KeyHint.Render(
-		"enter: submit  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
+		"enter: submit  ·  shift+↑↓: scroll  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
 	)
 	hintsHeight := lipgloss.Height(hints)
 
@@ -535,5 +587,4 @@ func (m *Model) syncViewportContent() {
 	contentWidth := m.width - 4
 	transcript := m.transcriptView(m.theme, contentWidth)
 	m.viewport.SetContent(transcript)
-	m.contentNeedsSync = false
 }

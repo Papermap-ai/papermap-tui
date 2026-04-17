@@ -85,6 +85,13 @@ type historyLoadedMsg struct {
 	err      string
 }
 
+// sessionExpiredMsg signals that the stored credentials are no longer valid
+// and could not be refreshed. The app clears state and routes the user back
+// to the login screen.
+type sessionExpiredMsg struct {
+	reason string
+}
+
 type Model struct {
 	width            int
 	height           int
@@ -99,6 +106,8 @@ type Model struct {
 	client           *api.Client
 	stream           *api.InsightStream
 	fallback         []chat.Message
+	bufferedText     string
+	bufferedTable    *chat.Table
 	theme            theme.Theme
 	landing          landing.Model
 	login            uitauth.Model
@@ -173,6 +182,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
 		}
+		if m.screen == screenChat {
+			updatedChat, cmd := m.chat.Update(msg)
+			m.chat = updatedChat
+			return m, cmd
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -201,6 +215,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenChat
 		m.closeStream()
 		m.fallback = nil
+		m.bufferedText = ""
+		m.bufferedTable = nil
 		m.chat.Clear()
 		return m, nil
 
@@ -225,12 +241,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.stream = msg.stream
 		m.fallback = msg.fallback
+		m.bufferedText = ""
+		m.bufferedTable = nil
 		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
 		if msg.stream == nil {
 			if msg.response != nil {
-				m.chat.CompleteStream()
 				if len(msg.fallback) > 0 {
 					m.chat.ReplaceLastAssistant(msg.fallback)
+				} else {
+					m.chat.CompleteStream()
 				}
 			}
 			m.fallback = nil
@@ -241,23 +260,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case insightChunkMsg:
 		if msg.err != "" {
 			m.closeStream()
+			m.bufferedText = ""
+			m.bufferedTable = nil
 			m.chat.FailStream(msg.err)
 			return m, nil
 		}
 
 		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
+
+		// Buffer chunks silently until the stream completes. No partial render.
 		if msg.table != nil {
-			m.chat.SetStreamTable(msg.table)
+			m.bufferedTable = msg.table
 		}
 		if msg.text != "" {
-			m.chat.AppendStreamText(msg.text)
+			m.bufferedText += msg.text
 		}
+
 		if !msg.done {
 			return m, m.continueInsightStream()
 		}
 
 		m.closeStream()
-		m.chat.CompleteStream()
+
+		bufferedContent := m.bufferedText
+		bufferedTable := m.bufferedTable
+		m.bufferedText = ""
+		m.bufferedTable = nil
+
+		if strings.TrimSpace(bufferedContent) != "" || bufferedTable != nil {
+			m.chat.ReplaceLastAssistant([]chat.Message{{
+				Role:    "alan",
+				Content: strings.TrimSpace(bufferedContent),
+				Table:   bufferedTable,
+			}})
+		} else {
+			m.chat.CompleteStream()
+		}
+
 		if chatID := m.chat.ChatID(); chatID != "" {
 			return m, m.loadConversationHistory(chatID, msg.fallback)
 		}
@@ -283,6 +322,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chat.ReplaceHistory(msg.messages)
 		m.fallback = nil
+		return m, nil
+
+	case sessionExpiredMsg:
+		m.closeStream()
+		m.fallback = nil
+		m.bufferedText = ""
+		m.bufferedTable = nil
+		m.authenticated = false
+		m.user = auth.User{}
+		_ = m.store.Clear()
+		m.chat.Clear()
+		reason := strings.TrimSpace(msg.reason)
+		if reason == "" {
+			reason = "Your session expired. Please sign in again."
+		}
+		m.login.Reset()
+		m.login.SetError(reason)
+		m.screen = screenLogin
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -327,6 +384,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyClearChat:
 			m.closeStream()
 			m.fallback = nil
+			m.bufferedText = ""
+			m.bufferedTable = nil
 			m.chat.Clear()
 			return m, nil
 		}
@@ -428,6 +487,10 @@ func (m Model) loadStartup() tea.Cmd {
 		if err != nil {
 			return startupMsg{config: cfg, err: err}
 		}
+
+		// Wire up the refresher so the token store can refresh access tokens
+		// on demand once the session is live.
+		m.store.SetRefresher(newRefresher(client, m.store))
 
 		authenticated, err := m.restoreSession(context.Background(), client)
 		if err != nil {
@@ -585,6 +648,9 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 				DashboardID: m.defaultDashboard,
 			})
 			if err != nil {
+				if expired, ok := sessionExpiredFromError(err); ok {
+					return expired
+				}
 				return insightStartedMsg{err: err.Error()}
 			}
 			chatID = strings.TrimSpace(created.LLMDataChatID)
@@ -616,6 +682,9 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 
 		result := <-resultCh
 		if result.err != nil {
+			if expired, ok := sessionExpiredFromError(result.err); ok {
+				return expired
+			}
 			return insightStartedMsg{
 				chatID:    result.chatID,
 				requestID: result.requestID,
@@ -734,6 +803,9 @@ func (m Model) continueInsightStream() tea.Cmd {
 					done:      true,
 				}
 			}
+			if expired, ok := sessionExpiredFromError(err); ok {
+				return expired
+			}
 			return insightChunkMsg{err: err.Error()}
 		}
 
@@ -759,6 +831,9 @@ func (m Model) loadConversationHistory(chatID string, fallback []chat.Message) t
 
 		messages, err := m.client.ConversationHistory(context.Background(), chatID)
 		if err != nil {
+			if expired, ok := sessionExpiredFromError(err); ok {
+				return expired
+			}
 			if strings.Contains(strings.ToLower(err.Error()), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
 				return historyLoadedMsg{chatID: chatID, messages: nil, fallback: fallback}
 			}
@@ -851,4 +926,24 @@ func (m *Model) closeStream() {
 	}
 	_ = m.stream.Close()
 	m.stream = nil
+}
+
+// sessionExpiredFromError checks if err is an auth.ErrSessionExpired and, if
+// so, returns a sessionExpiredMsg. The second return value indicates whether
+// it matched. Callers use this to route token-expiry errors through the app's
+// session-expired flow rather than surfacing them as generic failures.
+func sessionExpiredFromError(err error) (tea.Msg, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if errors.Is(err, auth.ErrSessionExpired) {
+		return sessionExpiredMsg{reason: "Your session expired. Please sign in again."}, true
+	}
+	// The api client wraps bearer-load errors. Match on the sentinel by
+	// string as a fallback since some error chains unwrap through fmt.Errorf
+	// with %v rather than %w.
+	if strings.Contains(err.Error(), auth.ErrSessionExpired.Error()) {
+		return sessionExpiredMsg{reason: "Your session expired. Please sign in again."}, true
+	}
+	return nil, false
 }
