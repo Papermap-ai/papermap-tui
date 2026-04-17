@@ -19,6 +19,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/theme"
 	uitauth "github.com/papermap/papermap-tui/internal/ui/auth"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
+	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
 )
@@ -105,6 +106,8 @@ type Model struct {
 	workspace        workspace.Model
 	store            *auth.TokenStore
 	spinner          spinner.Model
+	confirmQuit      bool
+	confirmQuitYes   bool
 }
 
 func Run() error {
@@ -283,10 +286,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.confirmQuit {
+			return m.updateQuitConfirm(msg)
+		}
+
+		if msg.String() == keyQuit {
+			m.confirmQuit = true
+			m.confirmQuitYes = false
+			return m, nil
+		}
+
 		if m.screen == screenLogin {
-			if msg.String() == keyQuit {
-				return m, tea.Quit
-			}
 			if msg.String() == keyEscape {
 				return m.handleEscape(), nil
 			}
@@ -305,8 +315,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case keyQuit:
-			return m, tea.Quit
 		case keyEscape:
 			return m.handleEscape(), nil
 		case keyEnter:
@@ -337,10 +345,76 @@ func (m Model) View() tea.View {
 		}, "\n")
 	}
 
-	v := tea.NewView(m.frame(content))
+	base := m.frame(content)
+
+	if m.confirmQuit {
+		base = m.overlayQuitDialog(base)
+	}
+
+	v := tea.NewView(base)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeAllMotion
 	return v
+}
+
+func (m Model) overlayQuitDialog(base string) string {
+	dialog := components.ConfirmDialog{
+		Title:       "Are you sure you want to quit?",
+		Yes:         "Yep!",
+		No:          "Nope",
+		YesSelected: m.confirmQuitYes,
+	}
+	overlay := dialog.View(m.theme, m.width)
+
+	baseW := lipgloss.Width(base)
+	baseH := lipgloss.Height(base)
+	if baseW <= 0 && m.width > 0 {
+		baseW = m.width
+	}
+	if baseH <= 0 && m.height > 0 {
+		baseH = m.height
+	}
+
+	ow := lipgloss.Width(overlay)
+	oh := lipgloss.Height(overlay)
+	x := (baseW - ow) / 2
+	y := (baseH - oh) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+
+	baseLayer := lipgloss.NewLayer(base).Z(0)
+	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
+
+	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
+}
+
+func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "right", "tab", "shift+tab", "h", "l":
+		m.confirmQuitYes = !m.confirmQuitYes
+		return m, nil
+	case "y", "Y":
+		return m, tea.Quit
+	case "n", "N", keyEscape:
+		m.confirmQuit = false
+		m.confirmQuitYes = false
+		return m, nil
+	case keyEnter:
+		if m.confirmQuitYes {
+			return m, tea.Quit
+		}
+		m.confirmQuit = false
+		m.confirmQuitYes = false
+		return m, nil
+	case keyQuit:
+		// A second ctrl+c force-quits as an escape hatch.
+		return m, tea.Quit
+	}
+	return m, nil
 }
 
 func (m Model) loadStartup() tea.Cmd {
