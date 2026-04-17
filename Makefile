@@ -8,6 +8,10 @@ build:
 run:
 	go run ./cmd/papermap
 
+logout: 
+	rm ~/.papermap/credentials
+
+
 test:
 	go test ./...
 
