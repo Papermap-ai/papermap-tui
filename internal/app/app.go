@@ -34,6 +34,15 @@ const (
 	screenWorkspacePicker screen = "workspace_picker"
 )
 
+// Minimum terminal dimensions required for the UI to render correctly.
+// Below these, we show a notice asking the user to resize. The width is
+// chosen to accommodate the landing panel (62 cols) and chat layout; the
+// height leaves room for the logo, panel, and key hints.
+const (
+	minTerminalWidth  = 60
+	minTerminalHeight = 20
+)
+
 type startupMsg struct {
 	config        config.Config
 	authenticated bool
@@ -397,6 +406,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
+	if m.terminalTooSmall() {
+		v := tea.NewView(m.tooSmallView())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeAllMotion
+		return v
+	}
+
 	content := m.viewScreen()
 	if m.startupErr != nil {
 		content = strings.Join([]string{
@@ -607,6 +623,35 @@ func (m Model) frame(content string) string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
+}
+
+// terminalTooSmall reports whether the current terminal dimensions are below
+// the minimum required for the UI to render correctly. Returns false while
+// dimensions are still unknown (before the first WindowSizeMsg).
+func (m Model) terminalTooSmall() bool {
+	if m.width <= 0 || m.height <= 0 {
+		return false
+	}
+	return m.width < minTerminalWidth || m.height < minTerminalHeight
+}
+
+// tooSmallView renders a centered notice asking the user to resize their
+// terminal. Shown in place of any screen when the terminal falls below the
+// minimum supported size.
+func (m Model) tooSmallView() string {
+	lines := []string{
+		m.theme.Accent.Render("Terminal too small"),
+		"",
+		m.theme.Body.Render("Papermap needs a larger window to render."),
+		m.theme.Muted.Render(fmt.Sprintf(
+			"Current: %d×%d   Minimum: %d×%d",
+			m.width, m.height, minTerminalWidth, minTerminalHeight,
+		)),
+		"",
+		m.theme.KeyHint.Render("Resize your terminal  •  Ctrl+C quit"),
+	}
+	content := strings.Join(lines, "\n")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
 func (m Model) initiateLogin(msg uitauth.SubmitMsg) tea.Cmd {

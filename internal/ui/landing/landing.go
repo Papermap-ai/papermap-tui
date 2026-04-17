@@ -3,6 +3,8 @@ package landing
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 )
@@ -15,22 +17,28 @@ func NewModel() Model {
 
 func (Model) View(th theme.Theme, width int) string {
 	panelWidth := clampWidth(width, 62)
-	panel := th.Panel.Width(panelWidth).Render(strings.Join([]string{
-		th.Title.Render("Terminal-native insights"),
+
+	centerInPanel := func(rendered string) string {
+		return lipgloss.PlaceHorizontal(panelWidth, lipgloss.Center, rendered)
+	}
+
+	panel := strings.Join([]string{
+		centerInPanel(th.Body.Render("Sign in with your Papermap account to continue.")),
 		"",
-		th.Body.Render(strings.Join([]string{
-			"Ask Papermap questions from your terminal.",
-			"Sign in with your Papermap account to continue.",
-		}, "\n")),
+		centerInPanel(th.Accent.Render("Press Enter to sign in")),
 		"",
-		th.Accent.Render("Press Enter to sign in"),
-		"",
-		th.KeyHint.Render("Enter sign in  •  Ctrl+C quit"),
-	}, "\n"))
+		centerInPanel(th.KeyHint.Render("Enter sign in  •  Ctrl+C quit")),
+	}, "\n")
+
+	tagline := lipgloss.PlaceHorizontal(
+		panelWidth,
+		lipgloss.Center,
+		th.Muted.Render("Focused terminal access to Papermap insights."),
+	)
 
 	return strings.Join([]string{
 		components.Logo(th, panelWidth),
-		th.Muted.Render("Focused terminal access to Papermap insights."),
+		tagline,
 		"",
 		panel,
 	}, "\n")
