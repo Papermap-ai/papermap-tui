@@ -56,7 +56,7 @@ func NewModel(th theme.Theme) Model {
 	ta.SetWidth(30)
 	ta.SetHeight(2)
 	ta.MaxHeight = 5
-	ta.MinHeight = 2
+	ta.MinHeight = 3
 	ta.DynamicHeight = true
 
 	s := ta.Styles()
@@ -371,8 +371,12 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
 	inputView := addLeftBar(th.Accent, taView)
 
-	hints := th.KeyHint.Render(
-		"enter: submit  ·  ctrl+l: clear chat  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+	hints := lipgloss.PlaceHorizontal(
+		panelWidth,
+		lipgloss.Center,
+		th.KeyHint.Render(
+			"enter: submit  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+		),
 	)
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
