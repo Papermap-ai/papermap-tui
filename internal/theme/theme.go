@@ -19,7 +19,10 @@ type Theme struct {
 	KeyHint    lipgloss.Style
 	Error      lipgloss.Style
 	Accent     lipgloss.Style
-	InputBg    color.Color // Distinct background for the text input area.
+	// InputAccent is a softer accent reserved for the prompt input bar so
+	// it reads as distinct from assistant message accents.
+	InputAccent lipgloss.Style
+	InputBg     color.Color // Distinct background for the text input area.
 }
 
 func Default() Theme {
@@ -57,6 +60,9 @@ func Default() Theme {
 			Foreground(errorColor),
 		Accent: lipgloss.NewStyle().
 			Foreground(accent).
+			Bold(true),
+		InputAccent: lipgloss.NewStyle().
+			Foreground(soft).
 			Bold(true),
 		LogoColorA: accent,
 		LogoColorB: soft,

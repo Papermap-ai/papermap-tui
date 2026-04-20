@@ -63,13 +63,7 @@ func (d ConfirmDialog) View(th theme.Theme, screenWidth int) string {
 
 	body := lipgloss.JoinVertical(lipgloss.Center, lines...)
 
-	panelWidth := 52
-	if screenWidth > 0 && screenWidth-6 < panelWidth {
-		panelWidth = screenWidth - 6
-	}
-	if panelWidth < 28 {
-		panelWidth = 28
-	}
+	panelWidth := confirmPanelWidth(screenWidth)
 
 	panel := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -79,4 +73,32 @@ func (d ConfirmDialog) View(th theme.Theme, screenWidth int) string {
 		Align(lipgloss.Center)
 
 	return panel.Render(body)
+}
+
+// confirmPanelWidth scales the confirm dialog with the terminal width while
+// keeping it visibly compact. The lower bound (46) fits inside the app's
+// minimum supported terminal width (60 cols) once the 6-column outer margin
+// is subtracted; the upper bound prevents it from sprawling on wide
+// terminals.
+func confirmPanelWidth(screenWidth int) int {
+	const (
+		minW = 46
+		maxW = 64
+	)
+	if screenWidth <= 0 {
+		return minW
+	}
+	// Aim for roughly half the screen so the dialog reads as a focused
+	// modal rather than a full-width panel.
+	width := (screenWidth - 6) / 2
+	if width > maxW {
+		width = maxW
+	}
+	if width < minW {
+		width = screenWidth - 6
+		if width < 28 {
+			width = 28
+		}
+	}
+	return width
 }

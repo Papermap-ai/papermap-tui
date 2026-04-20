@@ -388,7 +388,7 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 	}
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
 	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.Accent, taView)
+	inputView := addLeftBar(th.InputAccent, taView)
 
 	hints := lipgloss.PlaceHorizontal(
 		panelWidth,
@@ -444,7 +444,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	// Input area.
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
 	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.Accent, taView)
+	inputView := addLeftBar(th.InputAccent, taView)
 
 	// Assemble: header, viewport, input, error (if any), hints.
 	sections := []string{
@@ -608,7 +608,7 @@ func (m *Model) updateViewportDimensions() {
 	m.textarea.SetWidth(max(width-4-2, 10))
 	bgStyle := lipgloss.NewStyle().Background(m.theme.InputBg)
 	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(m.theme.Accent, taView)
+	inputView := addLeftBar(m.theme.InputAccent, taView)
 	inputHeight := lipgloss.Height(inputView)
 
 	// Calculate error height if present.
