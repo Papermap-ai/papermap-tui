@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -104,6 +106,95 @@ func (c *Client) IncludedWorkspaces(ctx context.Context, workspaceID string) ([]
 	}
 
 	return decoded.Workspaces, decoded.Settings, nil
+}
+
+type WorkspaceSummary struct {
+	WorkspaceID      string `json:"workspace_id"`
+	Name             string `json:"name"`
+	WorkspaceType    string `json:"workspace_type"`
+	IsUnified        bool   `json:"is_unified"`
+	DefaultDashboard string `json:"default_dashboard"`
+}
+
+type paginatedWorkspacesEnvelope struct {
+	Success    bool               `json:"success"`
+	Message    string             `json:"message"`
+	Workspaces []WorkspaceSummary `json:"workspaces"`
+	Items      []WorkspaceSummary `json:"items"`
+	Data       []WorkspaceSummary `json:"data"`
+	Page       int                `json:"page"`
+	PerPage    int                `json:"per_page"`
+	Total      int                `json:"total"`
+	TotalPages int                `json:"total_pages"`
+	HasMore    bool               `json:"has_more"`
+}
+
+func (e paginatedWorkspacesEnvelope) entries() []WorkspaceSummary {
+	switch {
+	case len(e.Workspaces) > 0:
+		return e.Workspaces
+	case len(e.Items) > 0:
+		return e.Items
+	case len(e.Data) > 0:
+		return e.Data
+	}
+	return nil
+}
+
+// ListWorkspaces fetches all workspaces visible to the current user by
+// paging through GET /api/v1/analytics/workspaces/paginate. Pagination is
+// capped defensively to avoid runaway loops.
+func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceSummary, error) {
+	const (
+		perPage  = 50
+		maxPages = 20
+	)
+
+	var collected []WorkspaceSummary
+	for page := 1; page <= maxPages; page++ {
+		query := url.Values{}
+		query.Set("page", strconv.Itoa(page))
+		query.Set("per_page", strconv.Itoa(perPage))
+
+		req, err := c.NewRequest(ctx, http.MethodGet, "/api/v1/analytics/workspaces/paginate", nil)
+		if err != nil {
+			return nil, err
+		}
+		req.URL.RawQuery = query.Encode()
+
+		resp, err := c.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		decoded, err := decodeJSONResponse[paginatedWorkspacesEnvelope](resp)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		batch := decoded.entries()
+		if len(batch) == 0 {
+			break
+		}
+		collected = append(collected, batch...)
+
+		// Stop conditions: explicit total_pages, has_more=false, or partial
+		// page indicating we've exhausted results.
+		if decoded.TotalPages > 0 && page >= decoded.TotalPages {
+			break
+		}
+		if !decoded.HasMore && decoded.TotalPages == 0 && len(batch) < perPage {
+			break
+		}
+		if decoded.HasMore == false && decoded.TotalPages == 0 && len(batch) >= perPage {
+			// Server didn't tell us anything useful and returned a full page;
+			// keep going but bounded by maxPages.
+			continue
+		}
+	}
+
+	return collected, nil
 }
 
 func (c *Client) CreateChat(ctx context.Context, reqBody ChatCreateRequest) (*ChatCreateResponse, error) {

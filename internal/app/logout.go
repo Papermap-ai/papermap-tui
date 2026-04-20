@@ -44,6 +44,8 @@ func Logout() (string, error) {
 			return "", err
 		}
 
+		_ = config.ClearWorkspaces()
+
 		return "Logged out successfully.", nil
 
 	case errors.Is(err, os.ErrNotExist):
