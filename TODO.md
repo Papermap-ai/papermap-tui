@@ -5,4 +5,7 @@
 - [x] Figure out how to place the question prompt at the bottom of the screen
 - [x] Add a dialog box when you quit for the user to confirm that they want to quit
 - [x] Figure out how to have it such that the answers show up as scrollabele text
-- [ ] Figure out how to display different tables and types like that when the results are loaded from the API
+- [x] Figure out how to display different tables and types like that when the results are loaded from the API
+- [ ] Build the switching between workspaces UI
+- [ ] Figure out how to display the content as it streams, particularly the thinking process.
+- [ ] Add a better means of authenticating the user in the auth backend

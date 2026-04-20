@@ -3,11 +3,38 @@ package chat
 import (
 	"regexp"
 	"strings"
+	"sync"
 
+	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 
 	"github.com/papermap/papermap-tui/internal/theme"
 )
+
+// glamourCache memoizes TermRenderer instances per word-wrap width so we
+// avoid rebuilding the markdown pipeline on every redraw.
+var (
+	glamourMu    sync.Mutex
+	glamourCache = map[int]*glamour.TermRenderer{}
+)
+
+func glamourRenderer(width int) *glamour.TermRenderer {
+	glamourMu.Lock()
+	defer glamourMu.Unlock()
+	if r, ok := glamourCache[width]; ok {
+		return r
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return nil
+	}
+	glamourCache[width] = r
+	return r
+}
 
 // trailingGapPattern matches a run of trailing whitespace that may be wrapped
 // in (or followed by) ANSI reset sequences. It captures the trimmed trailing
@@ -47,23 +74,75 @@ func padLinesToWidth(bgStyle lipgloss.Style, width int, content string) string {
 }
 
 func renderRichText(th theme.Theme, width int, content string) string {
-	return th.Body.Width(max(width-8, 20)).Render(strings.TrimSpace(content))
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	wrap := max(width-8, 20)
+	if r := glamourRenderer(wrap); r != nil {
+		if out, err := r.Render(trimmed); err == nil {
+			// Glamour adds leading/trailing blank lines for breathing room
+			// inside a full document; inside a chat bubble that wastes
+			// vertical space, so trim them.
+			return strings.Trim(out, "\n")
+		}
+	}
+	return th.Body.Width(wrap).Render(trimmed)
 }
 
-func renderTable(th theme.Theme, width int, table *Table) string {
-	if table == nil || len(table.Columns) == 0 || len(table.Rows) == 0 {
+// maxCellContentWidth caps the visible width of any single table cell.
+// Cells are truncated with an ellipsis past this width, even when the
+// available column width could fit more characters. The cap keeps wide
+// strings (URLs, long descriptions) from forcing the entire table to
+// overflow the viewport.
+const maxCellContentWidth = 20
+
+func renderTable(th theme.Theme, t *Table) string {
+	if t == nil || len(t.Columns) == 0 || len(t.Rows) == 0 {
 		return ""
 	}
 
-	columns := normalizeColumns(table.Columns, table.Rows)
-	cellWidth := max((width-12)/max(len(columns), 1), 12)
+	columns := normalizeColumns(t.Columns, t.Rows)
 
-	lines := []string{formatTableRow(columns, cellWidth), formatTableDivider(len(columns), cellWidth)}
-	for _, row := range table.Rows {
-		lines = append(lines, formatTableRow(row, cellWidth))
+	// Truncate every cell upfront so column widths stay bounded; lipgloss
+	// table handles padding, alignment, and borders for us.
+	headers := make([]string, len(columns))
+	for i, col := range columns {
+		headers[i] = truncateCell(col, maxCellContentWidth)
 	}
 
-	return th.Muted.Render(strings.Join(lines, "\n"))
+	rows := make([][]string, len(t.Rows))
+	for i, row := range t.Rows {
+		cells := make([]string, len(columns))
+		for j := range columns {
+			value := ""
+			if j < len(row) {
+				value = row[j]
+			}
+			cells[j] = truncateCell(value, maxCellContentWidth)
+		}
+		rows[i] = cells
+	}
+
+	headerStyle := th.Title.Padding(0, 1)
+	cellStyle := th.Body.Padding(0, 1)
+	borderStyle := th.Muted
+
+	tbl := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		BorderRow(false).
+		BorderColumn(true).
+		Headers(headers...).
+		Rows(rows...).
+		StyleFunc(func(row, _ int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return headerStyle
+			}
+			return cellStyle
+		})
+
+	return tbl.Render()
 }
 
 func normalizeColumns(columns []string, rows [][]string) []string {
@@ -85,37 +164,18 @@ func normalizeColumns(columns []string, rows [][]string) []string {
 	return normalized
 }
 
-func formatTableRow(row []string, cellWidth int) string {
-	formatted := make([]string, 0, len(row))
-	for _, cell := range row {
-		formatted = append(formatted, padCell(cell, cellWidth))
-	}
-	return "| " + strings.Join(formatted, " | ") + " |"
-}
-
-func formatTableDivider(columns int, cellWidth int) string {
-	parts := make([]string, columns)
-	for i := range columns {
-		parts[i] = strings.Repeat("-", cellWidth)
-	}
-	return "|-" + strings.Join(parts, "-+-") + "-|"
-}
-
-func padCell(value string, width int) string {
+// truncateCell trims whitespace and shortens value to at most width runes,
+// appending an ellipsis when content was cut.
+func truncateCell(value string, width int) string {
 	trimmed := strings.TrimSpace(value)
-	if len([]rune(trimmed)) > width {
-		runes := []rune(trimmed)
-		if width > 1 {
-			trimmed = string(runes[:width-1]) + "…"
-		} else {
-			trimmed = string(runes[:width])
-		}
+	runes := []rune(trimmed)
+	if len(runes) <= width {
+		return trimmed
 	}
-	padding := width - len([]rune(trimmed))
-	if padding < 0 {
-		padding = 0
+	if width <= 1 {
+		return string(runes[:width])
 	}
-	return trimmed + strings.Repeat(" ", padding)
+	return string(runes[:width-1]) + "…"
 }
 
 func max(a int, b int) int {
