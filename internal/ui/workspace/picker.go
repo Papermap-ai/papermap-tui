@@ -22,10 +22,36 @@ type CancelMsg struct{}
 
 const (
 	pageSize    = 6
-	panelWidth  = 78
-	minPanelW   = 48
+	maxPanelW   = 96
+	minPanelW   = 54
 	titleMargin = 1
 )
+
+// panelWidthFor returns the picker panel width scaled to the current
+// terminal width. It keeps a 6-column outer margin so the modal never
+// touches the terminal edges, then clamps to [minPanelW, maxPanelW].
+// minPanelW is chosen to fit inside the app's minimum supported terminal
+// width (60 cols) once outer margins are subtracted.
+func panelWidthFor(screenWidth int) int {
+	if screenWidth <= 0 {
+		return minPanelW
+	}
+	// Target ~80% of available width so the modal breathes on wide
+	// terminals but doesn't sprawl edge to edge.
+	width := (screenWidth - 6) * 4 / 5
+	if width > maxPanelW {
+		width = maxPanelW
+	}
+	if width < minPanelW {
+		// Allow shrinking below minPanelW only when the terminal itself
+		// is narrower than the minimum so we still render something.
+		width = screenWidth - 6
+		if width < 28 {
+			width = 28
+		}
+	}
+	return width
+}
 
 // Model is a stateful, focused picker rendered as a centered overlay.
 type Model struct {
@@ -161,13 +187,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View renders the modal panel. screenWidth caps the width so it fits
 // gracefully on narrow terminals.
 func (m Model) View(th theme.Theme, screenWidth int) string {
-	width := panelWidth
-	if screenWidth > 0 && screenWidth-6 < width {
-		width = screenWidth - 6
-	}
-	if width < minPanelW {
-		width = minPanelW
-	}
+	width := panelWidthFor(screenWidth)
 
 	header := th.Title.Render("Switch workspace")
 
