@@ -66,7 +66,6 @@ type insightStartedMsg struct {
 	requestID string
 	stream    *api.InsightStream
 	response  *api.InsightResponse
-	fallback  []chat.Message
 	err       string
 }
 
@@ -91,16 +90,8 @@ type insightChunkMsg struct {
 	requestID string
 	phase     string
 	status    string
-	fallback  []chat.Message
 	done      bool
 	err       string
-}
-
-type historyLoadedMsg struct {
-	chatID   string
-	messages []chat.Message
-	fallback []chat.Message
-	err      string
 }
 
 // sessionExpiredMsg signals that the stored credentials are no longer valid
@@ -123,7 +114,6 @@ type Model struct {
 	startupErr       error
 	client           *api.Client
 	stream           *api.InsightStream
-	fallback         []chat.Message
 	pendingResponse  *api.InsightResponse
 	pendingRequestID string
 	httpReceived     bool
@@ -265,7 +255,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.stream = msg.stream
-		m.fallback = msg.fallback
 		m.pendingRequestID = msg.requestID
 		m.httpReceived = false
 		m.sseComplete = false
@@ -320,24 +309,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeStream()
 		m.sseComplete = true
 		return m.tryFinalizeInsight()
-
-	case historyLoadedMsg:
-		if msg.err != "" {
-			// Don't treat history load errors as fatal - just log and continue.
-			// The user can still use chat even if history failed to load.
-			return m, nil
-		}
-		if len(msg.messages) == 0 && len(msg.fallback) > 0 {
-			m.chat.ReplaceLastAssistant(msg.fallback)
-			m.fallback = nil
-			return m, nil
-		}
-		if len(msg.messages) == 0 {
-			return m, nil
-		}
-		m.chat.ReplaceHistory(msg.messages)
-		m.fallback = nil
-		return m, nil
 
 	case sessionExpiredMsg:
 		m.closeStream()
@@ -935,36 +906,6 @@ func humanizePhase(phase string) string {
 	}
 }
 
-func (m Model) loadConversationHistory(chatID string, fallback []chat.Message) tea.Cmd {
-	return func() tea.Msg {
-		if m.client == nil {
-			return historyLoadedMsg{err: "API client is not ready yet."}
-		}
-
-		messages, err := m.client.ConversationHistory(context.Background(), chatID)
-		if err != nil {
-			if expired, ok := sessionExpiredFromError(err); ok {
-				return expired
-			}
-			if strings.Contains(strings.ToLower(err.Error()), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
-				return historyLoadedMsg{chatID: chatID, messages: nil, fallback: fallback}
-			}
-			return historyLoadedMsg{chatID: chatID, err: err.Error()}
-		}
-
-		converted := make([]chat.Message, 0, len(messages))
-		for _, message := range messages {
-			converted = append(converted, chat.Message{
-				Role:    normalizeRole(message.Role),
-				Content: message.Content,
-				Table:   toChatTable(message.Table),
-			})
-		}
-
-		return historyLoadedMsg{chatID: chatID, messages: converted, fallback: fallback}
-	}
-}
-
 func toChatTable(table *api.InsightTable) *chat.Table {
 	if table == nil {
 		return nil
@@ -982,28 +923,6 @@ func cloneRows(rows [][]string) [][]string {
 		cloned = append(cloned, append([]string(nil), row...))
 	}
 	return cloned
-}
-
-func normalizeRole(role string) string {
-	trimmed := strings.ToLower(strings.TrimSpace(role))
-	switch trimmed {
-	case "user", "you":
-		return "you"
-	default:
-		return "alan"
-	}
-}
-
-func convertInsightMessages(messages []api.InsightMessage) []chat.Message {
-	converted := make([]chat.Message, 0, len(messages))
-	for _, message := range messages {
-		converted = append(converted, chat.Message{
-			Role:    normalizeRole(message.Role),
-			Content: message.Content,
-			Table:   toChatTable(message.Table),
-		})
-	}
-	return converted
 }
 
 func loadUnifiedWorkspaceContext(ctx context.Context, client *api.Client) (*api.UnifiedWorkspace, error) {
@@ -1044,7 +963,6 @@ func (m *Model) closeStream() {
 // on any path that tears down an in-flight insight (error, clear, logout,
 // session expiry, completion).
 func (m *Model) resetInsightState() {
-	m.fallback = nil
 	m.pendingResponse = nil
 	m.pendingRequestID = ""
 	m.httpReceived = false
@@ -1060,23 +978,16 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 	}
 
 	response := m.pendingResponse
-	fallback := m.fallback
-	chatID := strings.TrimSpace(m.chat.ChatID())
 	m.resetInsightState()
 	m.chat.SetStreamStatus("")
 
 	if response != nil {
-		content := strings.TrimSpace(response.TextResponse)
-		if content == "" {
-			content = strings.TrimSpace(response.Thoughts)
-		}
-		table := toChatTable(extractTableFromResponse(response))
-		if content != "" || table != nil {
-			m.chat.ReplaceLastAssistant([]chat.Message{{
-				Role:    "alan",
-				Content: content,
-				Table:   table,
-			}})
+		message := buildAssistantMessage(response)
+		hasContent := strings.TrimSpace(message.Content) != "" ||
+			message.Table != nil || message.Tile != nil ||
+			message.EmptyData || message.ChartType != ""
+		if hasContent {
+			m.chat.ReplaceLastAssistant([]chat.Message{message})
 		} else {
 			m.chat.CompleteStream()
 		}
@@ -1084,14 +995,6 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 		m.chat.CompleteStream()
 	}
 
-	// Conversation history refresh still provides the authoritative record
-	// of the exchange (e.g. chart thumbnails, server-side post-processing).
-	if chatID != "" {
-		return m, m.loadConversationHistory(chatID, fallback)
-	}
-	if len(fallback) > 0 {
-		m.chat.ReplaceLastAssistant(fallback)
-	}
 	return m, nil
 }
 
@@ -1110,6 +1013,62 @@ func extractTableFromResponse(response *api.InsightResponse) *api.InsightTable {
 // this file read consistently.
 func extractTableRaw(raw map[string]any) *api.InsightTable {
 	return api.ExtractTable(raw)
+}
+
+// buildAssistantMessage converts an InsightResponse into a chat.Message,
+// dispatching on chart_type. Tables and tiles parse directly from the
+// preserved raw `data` JSON bytes so column/key order stays faithful to
+// the backend response. Unsupported chart types fall through with the
+// markdown narrative and a chart-type badge added by the renderer.
+func buildAssistantMessage(response *api.InsightResponse) chat.Message {
+	content := strings.TrimSpace(response.TextResponse)
+	if content == "" {
+		content = strings.TrimSpace(response.Thoughts)
+	}
+
+	chartType := strings.ToLower(strings.TrimSpace(response.ChartType))
+	message := chat.Message{
+		Role:      "alan",
+		Content:   content,
+		ChartType: chartType,
+	}
+
+	switch chartType {
+	case "table":
+		table := api.BuildDataRowsTable(response.RawDataJSON)
+		if table != nil {
+			message.Table = toChatTable(table)
+		} else {
+			// Fall back to legacy {columns, rows} extractor.
+			if legacy := extractTableFromResponse(response); legacy != nil {
+				message.Table = toChatTable(legacy)
+			} else {
+				message.EmptyData = true
+			}
+		}
+
+	case "tile":
+		tile := api.BuildTile(response.RawDataJSON)
+		if tile != nil {
+			message.Tile = &chat.Tile{
+				Label:        tile.Label,
+				Value:        tile.Value,
+				FormatConfig: response.VisualizationConfig,
+			}
+		} else {
+			message.EmptyData = true
+		}
+
+	default:
+		// Other chart types (bar/line/pie/scatter/area/radar) render
+		// with just the narrative + a chart-type badge. The legacy
+		// extractor still has a chance for ad-hoc table payloads.
+		if legacy := extractTableFromResponse(response); legacy != nil {
+			message.Table = toChatTable(legacy)
+		}
+	}
+
+	return message
 }
 
 // sessionExpiredFromError checks if err is an auth.ErrSessionExpired and, if

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,8 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/papermap/papermap-tui/internal/auth"
 )
 
 type InsightRequest struct {
@@ -44,6 +43,12 @@ type InsightResponse struct {
 	VisualizationConfig map[string]any `json:"visualization_config,omitempty"`
 	ProgressEvents      []any          `json:"progress_events,omitempty"`
 	Raw                 map[string]any
+	// RawDataJSON holds the raw JSON bytes of the `data` field (or the
+	// nested `data.data` field when the backend wraps responses in an
+	// envelope). Preserved so renderers can re-parse with json.Decoder to
+	// recover JSON object key insertion order, which is lost when
+	// decoding into map[string]any.
+	RawDataJSON json.RawMessage
 }
 
 func (r *InsightResponse) UnmarshalJSON(data []byte) error {
@@ -67,8 +72,48 @@ func (r *InsightResponse) UnmarshalJSON(data []byte) error {
 	r.Code = firstRawString(decoded.Code, lookupRawString(raw, "code"), lookupNestedRawString(raw, "data", "code"))
 	r.Thoughts = firstRawString(decoded.Thoughts, lookupRawString(raw, "thoughts"), lookupNestedRawString(raw, "data", "thoughts"))
 	r.ChartType = firstString(decoded.ChartType, lookupString(raw, "chart_type"), lookupNestedString(raw, "data", "chart_type"))
+	r.RawDataJSON = extractRawDataField(data)
 
 	return nil
+}
+
+// extractRawDataField returns the raw JSON bytes of the `data` field from
+// the top-level object. If the top-level `data` is itself an object that
+// contains a nested `data` array (envelope shape), it returns that nested
+// array's bytes instead. Returns nil when no usable `data` field exists.
+func extractRawDataField(body []byte) json.RawMessage {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil
+	}
+	dataBytes, ok := top["data"]
+	if !ok {
+		return nil
+	}
+
+	trimmed := bytes.TrimSpace(dataBytes)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+
+	// If the outer `data` is an object, peek for a nested `data` array.
+	if trimmed[0] == '{' {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &nested); err == nil {
+			if inner, ok := nested["data"]; ok {
+				innerTrim := bytes.TrimSpace(inner)
+				if len(innerTrim) > 0 && innerTrim[0] == '[' {
+					return inner
+				}
+			}
+		}
+		return nil
+	}
+
+	if trimmed[0] != '[' {
+		return nil
+	}
+	return dataBytes
 }
 
 type InsightStreamRequest struct {
@@ -81,11 +126,11 @@ type InsightTable struct {
 	Rows    [][]string
 }
 
-type InsightMessage struct {
-	Role    string
-	Content string
-	Table   *InsightTable
-	Raw     map[string]any
+// TileData represents a single-metric tile rendered as a card. Label is the
+// derived column/key name; Value is the formatted scalar value as a string.
+type TileData struct {
+	Label string
+	Value string
 }
 
 type InsightStreamEvent struct {
@@ -163,28 +208,28 @@ func (c *Client) OpenInsightStream(ctx context.Context, reqBody InsightStreamReq
 	}, nil
 }
 
-func (c *Client) ConversationHistory(ctx context.Context, chatID string) ([]InsightMessage, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, "/api/v1/analytics/chats/"+strings.TrimSpace(chatID)+"/conversations", nil)
+// GetChart fetches a single chart record by its llm_data id. This is used
+// for lazy-loading chart payloads (chart_type + data) for messages in
+// conversation history, where the history endpoint strips that data to keep
+// list responses small.
+func (c *Client) GetChart(ctx context.Context, llmDataID string) (InsightResponse, error) {
+	id := strings.TrimSpace(llmDataID)
+	if id == "" {
+		return InsightResponse{}, fmt.Errorf("llm_data_id is required")
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodGet, "/api/v1/analytics/charts/"+id, nil)
 	if err != nil {
-		return nil, err
+		return InsightResponse{}, err
 	}
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, err
+		return InsightResponse{}, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if err := checkResponseStatus(resp.StatusCode, resp.Status, body); err != nil {
-		return nil, err
-	}
-
-	return decodeConversationHistory(body)
+	return decodeJSONResponse[InsightResponse](resp)
 }
 
 func (s *InsightStream) Next() (InsightStreamEvent, error) {
@@ -263,85 +308,6 @@ func (s *InsightStream) Close() error {
 		return nil
 	}
 	return s.body.Close()
-}
-
-func decodeConversationHistory(body []byte) ([]InsightMessage, error) {
-	var list []map[string]any
-	if err := json.Unmarshal(body, &list); err == nil {
-		return normalizeConversationMessages(list), nil
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("decode conversation history: %w", err)
-	}
-
-	for _, key := range []string{"data", "conversations", "messages", "items"} {
-		if items, ok := lookupSlice(raw, key); ok {
-			return normalizeConversationMessages(items), nil
-		}
-		if nestedItems, ok := lookupNestedSlice(raw, key, "items"); ok {
-			return normalizeConversationMessages(nestedItems), nil
-		}
-	}
-
-	return nil, fmt.Errorf("conversation history missing messages")
-}
-
-func normalizeConversationMessages(items []map[string]any) []InsightMessage {
-	messages := make([]InsightMessage, 0, len(items))
-	for _, item := range items {
-		role := firstString(
-			lookupString(item, "role"),
-			lookupString(item, "sender"),
-			lookupString(item, "type"),
-		)
-		if role == "" {
-			role = "assistant"
-		}
-
-		content := firstString(
-			lookupString(item, "content"),
-			lookupString(item, "text_response"),
-			lookupString(item, "text"),
-			lookupString(item, "message"),
-			lookupNestedString(item, "content", "text"),
-			lookupNestedString(item, "message", "content"),
-		)
-
-		messages = append(messages, InsightMessage{
-			Role:    role,
-			Content: content,
-			Table:   extractTable(item),
-			Raw:     item,
-		})
-	}
-
-	return messages
-}
-
-func InsightMessagesFromResponse(user auth.User, prompt string, response InsightResponse) []InsightMessage {
-	trimmedPrompt := strings.TrimSpace(prompt)
-	messages := make([]InsightMessage, 0, 2)
-	if trimmedPrompt != "" {
-		role := "user"
-		if strings.TrimSpace(user.Email) == "" {
-			role = "user"
-		}
-		messages = append(messages, InsightMessage{Role: role, Content: trimmedPrompt})
-	}
-
-	content := firstRawString(response.TextResponse, response.Thoughts)
-	if strings.TrimSpace(content) != "" || response.Data != nil {
-		messages = append(messages, InsightMessage{
-			Role:    "assistant",
-			Content: strings.TrimSpace(content),
-			Table:   extractTable(response.Raw),
-			Raw:     response.Raw,
-		})
-	}
-
-	return messages
 }
 
 func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, bool, error) {
@@ -510,6 +476,9 @@ func lookupRawString(raw map[string]any, key string) string {
 }
 
 func stringValue(value any) string {
+	if value == nil {
+		return ""
+	}
 	switch typed := value.(type) {
 	case string:
 		return typed
@@ -545,37 +514,6 @@ func lookupBool(raw map[string]any, key string) bool {
 	return ok && boolValue
 }
 
-func lookupSlice(raw map[string]any, key string) ([]map[string]any, bool) {
-	value, ok := raw[key]
-	if !ok {
-		return nil, false
-	}
-	items, ok := value.([]any)
-	if !ok {
-		return nil, false
-	}
-	return toMapSlice(items), true
-}
-
-func lookupNestedSlice(raw map[string]any, parent string, key string) ([]map[string]any, bool) {
-	nested, ok := raw[parent].(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	return lookupSlice(nested, key)
-}
-
-func toMapSlice(items []any) []map[string]any {
-	result := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		decoded, ok := item.(map[string]any)
-		if ok {
-			result = append(result, decoded)
-		}
-	}
-	return result
-}
-
 func firstString(values ...string) string {
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
@@ -593,4 +531,205 @@ func firstRawString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// BuildDataRowsTable parses a JSON array of objects and produces an
+// InsightTable whose column order matches the JSON key insertion order of
+// the first object. Sparse rows contribute additional columns appended in
+// the order they are first encountered. Returns nil for empty arrays or
+// non-array payloads.
+func BuildDataRowsTable(rawDataJSON []byte) *InsightTable {
+	rows, err := decodeRowsPreservingOrder(rawDataJSON)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+
+	columns := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		for _, key := range row.keys {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			columns = append(columns, key)
+		}
+	}
+	if len(columns) == 0 {
+		return nil
+	}
+
+	tableRows := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		cells := make([]string, len(columns))
+		for i, col := range columns {
+			if value, ok := row.values[col]; ok {
+				cells[i] = formatScalar(value)
+			}
+		}
+		tableRows = append(tableRows, cells)
+	}
+
+	return &InsightTable{Columns: columns, Rows: tableRows}
+}
+
+// BuildTile parses a JSON array of objects and returns the first scalar
+// key/value pair from the first row as a TileData. Returns nil if the
+// payload is empty, malformed, or has no scalar keys.
+func BuildTile(rawDataJSON []byte) *TileData {
+	rows, err := decodeRowsPreservingOrder(rawDataJSON)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	first := rows[0]
+	if len(first.keys) == 0 {
+		return nil
+	}
+	key := first.keys[0]
+	value := first.values[key]
+	return &TileData{
+		Label: key,
+		Value: formatScalar(value),
+	}
+}
+
+// orderedRow holds a single decoded JSON object, preserving the insertion
+// order of its keys.
+type orderedRow struct {
+	keys   []string
+	values map[string]any
+}
+
+func decodeRowsPreservingOrder(rawDataJSON []byte) ([]orderedRow, error) {
+	trimmed := bytes.TrimSpace(rawDataJSON)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '[' {
+		return nil, fmt.Errorf("data is not a JSON array")
+	}
+
+	rows := make([]orderedRow, 0)
+	for dec.More() {
+		row, err := decodeOrderedObject(dec)
+		if err != nil {
+			return nil, err
+		}
+		if row != nil {
+			rows = append(rows, *row)
+		}
+	}
+	return rows, nil
+}
+
+// decodeOrderedObject reads a single JSON object from dec, preserving the
+// key order. Non-object array entries are skipped (returns nil, nil).
+func decodeOrderedObject(dec *json.Decoder) (*orderedRow, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		// Skip non-object scalar entries.
+		return nil, nil
+	}
+	if delim != '{' {
+		// Nested array; skip to its closing bracket.
+		if err := skipUntilClose(dec, delim); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	row := &orderedRow{
+		keys:   make([]string, 0),
+		values: make(map[string]any),
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected string key, got %T", keyTok)
+		}
+
+		var value any
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+
+		if _, exists := row.values[key]; !exists {
+			row.keys = append(row.keys, key)
+		}
+		row.values[key] = value
+	}
+
+	// Consume closing '}'.
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func skipUntilClose(dec *json.Decoder, open json.Delim) error {
+	close := json.Delim(']')
+	if open == '{' {
+		close = json.Delim('}')
+	}
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == open {
+				depth++
+			} else if d == close {
+				depth--
+			}
+		}
+	}
+	return nil
+}
+
+// formatScalar renders a decoded JSON value (after json.Decoder.UseNumber)
+// to its display string. Numbers are rendered without exponent for
+// integer-valued floats; bools become "true"/"false"; nils render as the
+// empty string.
+func formatScalar(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case json.Number:
+		return v.String()
+	case float64:
+		// Trim trailing .0 for integer-valued floats.
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%g", v)
+	default:
+		return fmt.Sprint(v)
+	}
 }

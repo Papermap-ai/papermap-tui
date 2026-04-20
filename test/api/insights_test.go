@@ -148,39 +148,3 @@ func TestStartInsightAndStream(t *testing.T) {
 		t.Fatalf("unexpected stream request payload: %+v", streamRequest)
 	}
 }
-
-func TestConversationHistoryDecodesWrappedMessages(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/analytics/chats/chat-123/conversations" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": map[string]any{
-				"items": []map[string]any{
-					{"role": "user", "content": "What changed?"},
-					{"role": "assistant", "content": "Revenue grew.", "columns": []string{"Metric", "Value"}, "rows": [][]string{{"Revenue", "$10"}}},
-				},
-			},
-		})
-	}))
-	defer server.Close()
-
-	client, err := api.NewClient(server.URL, server.Client(), insightTokenSource{})
-	if err != nil {
-		t.Fatalf("NewClient returned error: %v", err)
-	}
-
-	messages, err := client.ConversationHistory(context.Background(), "chat-123")
-	if err != nil {
-		t.Fatalf("ConversationHistory returned error: %v", err)
-	}
-	if len(messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(messages))
-	}
-	if messages[1].Table == nil || len(messages[1].Table.Rows) != 1 {
-		t.Fatalf("expected table on assistant message, got %+v", messages[1])
-	}
-}

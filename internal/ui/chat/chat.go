@@ -22,11 +22,26 @@ type Table struct {
 	Rows    [][]string
 }
 
+// Tile holds a single-metric value derived from a chart_type=tile response.
+// FormatConfig is the raw visualization_config from the backend so the
+// renderer can apply currency/percent/integer formatting consistently.
+type Tile struct {
+	Label        string
+	Value        string
+	FormatConfig map[string]any
+}
+
 type Message struct {
-	Role    string
-	Content string
-	Table   *Table
-	Pending bool
+	Role      string
+	Content   string
+	Table     *Table
+	Tile      *Tile
+	ChartType string
+	// EmptyData is set when the response had a chart but the data array
+	// was empty. The renderer surfaces a "(no rows)" placeholder in that
+	// case so users see the response landed but had nothing to display.
+	EmptyData bool
+	Pending   bool
 }
 
 type Model struct {
@@ -269,12 +284,14 @@ func (m *Model) SetStreamTable(table *Table) {
 func (m *Model) CompleteStream() {
 	m.streaming = false
 	m.streamStatus = ""
-	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) &&
-		strings.TrimSpace(m.messages[m.activeResponse].Content) == "" &&
-		m.messages[m.activeResponse].Table == nil {
-		m.messages[m.activeResponse].Content = "No content returned."
-	}
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
+		msg := m.messages[m.activeResponse]
+		hasContent := strings.TrimSpace(msg.Content) != "" ||
+			msg.Table != nil || msg.Tile != nil ||
+			msg.EmptyData || msg.ChartType != ""
+		if !hasContent {
+			m.messages[m.activeResponse].Content = "No content returned."
+		}
 		m.messages[m.activeResponse].Pending = false
 	}
 	m.activeResponse = -1
@@ -293,19 +310,6 @@ func (m *Model) FailStream(err string) {
 		m.messages[m.activeResponse].Pending = false
 	}
 	m.activeResponse = -1
-	m.updateViewportDimensions()
-	m.syncViewportContent()
-	m.scrollToBottom()
-}
-
-func (m *Model) ReplaceHistory(messages []Message) {
-	m.messages = append([]Message(nil), messages...)
-	m.streaming = false
-	m.err = ""
-	m.activeResponse = -1
-	for i := range m.messages {
-		m.messages[i].Pending = false
-	}
 	m.updateViewportDimensions()
 	m.syncViewportContent()
 	m.scrollToBottom()
@@ -523,15 +527,37 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 			label = strings.TrimSpace(status)
 		}
 		body = th.Muted.Render(spinnerFrame + " " + label)
-	} else if body == "" {
+	} else if body == "" && message.Tile == nil && message.Table == nil && !message.EmptyData {
 		body = th.Muted.Render("No content.")
-	} else {
+	} else if body != "" {
 		body = renderRichText(th, width, body)
 	}
 
-	parts := []string{roleStyle.Render(strings.ToUpper(message.Role)), body}
-	if message.Table != nil {
-		parts = append(parts, renderTable(th, width, message.Table))
+	parts := []string{roleStyle.Render(strings.ToUpper(message.Role))}
+
+	// Tile renders first so the headline metric is the first thing the
+	// user sees; the narrative reads as supporting context.
+	if message.Tile != nil {
+		format := components.TileFormatFromConfig(message.Tile.FormatConfig)
+		tile := components.RenderTile(th, max(width-8, 20), message.Tile.Label, message.Tile.Value, format)
+		if tile != "" {
+			parts = append(parts, tile)
+		}
+	}
+
+	if body != "" {
+		parts = append(parts, body)
+	}
+
+	switch {
+	case message.EmptyData:
+		parts = append(parts, th.Muted.Render("(no rows)"))
+	case message.Table != nil:
+		parts = append(parts, renderTable(th, message.Table))
+	case message.ChartType != "" && message.Tile == nil:
+		if badge := components.ChartBadge(th, message.ChartType); badge != "" {
+			parts = append(parts, badge)
+		}
 	}
 
 	content := strings.Join(parts, "\n")
