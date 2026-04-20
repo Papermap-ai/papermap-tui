@@ -6,9 +6,12 @@ Built using [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lipglo
 ### Commands
 
 ```bash
+make build
 make run
 make test
 make fmt
+# testing it with the dev API
+PAPERMAP_API_URL=https://dev.dataapi.papermap.ai go run ./cmd/papermap
 ```
 
 ### Testing
