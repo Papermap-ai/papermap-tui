@@ -7,5 +7,10 @@
 - [x] Figure out how to have it such that the answers show up as scrollabele text
 - [x] Figure out how to display different tables and types like that when the results are loaded from the API
 - [x] Build the switching between workspaces UI
-- [ ] Figure out how to display the content as it streams, particularly the thinking process.
+- [ ] test it on other terminals
+- [ ] Figure out how to not be able to revert the binary file
+- [ ] Figure out how to add new workspaces from the UI
 - [ ] Add a better means of authenticating the user in the auth backend
+- [ ] Figure out how to run shell commands in the chat
+- [ ] think about the ability to prepend some things like an md file to the prompts that you send to Alan
+- [ ] Figure out how to display the content as it streams, particularly the thinking process.
