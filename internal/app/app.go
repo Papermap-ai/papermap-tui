@@ -110,6 +110,8 @@ type Model struct {
 	workspaceName    string
 	workspaceID      string
 	defaultDashboard string
+	workspaces       []config.WorkspaceEntry
+	workspacesAt     time.Time
 	user             auth.User
 	startupErr       error
 	client           *api.Client
@@ -151,6 +153,8 @@ func NewModel() (Model, error) {
 
 	th := theme.Default()
 
+	cache, _ := config.LoadWorkspaces()
+
 	return Model{
 		screen:        screenSplash,
 		workspaceName: "Unified Workspace",
@@ -159,6 +163,8 @@ func NewModel() (Model, error) {
 		login:         uitauth.NewModel(),
 		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
+		workspaces:    cache.Workspaces,
+		workspacesAt:  cache.UpdatedAt,
 		store:         store,
 		spinner:       newSplashSpinner(th),
 	}, nil
@@ -181,6 +187,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.user = cred.User
 			}
 			m.screen = screenChat
+			if m.shouldRefreshWorkspaces() {
+				return m, loadWorkspacesCmd(m.client)
+			}
 		} else {
 			m.screen = screenLanding
 		}
@@ -226,6 +235,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeStream()
 		m.resetInsightState()
 		m.chat.Clear()
+		return m, loadWorkspacesCmd(m.client)
+
+	case workspacesLoadedMsg:
+		if msg.err != nil || len(msg.entries) == 0 {
+			// Non-fatal. Keep whatever we already have cached. If the picker
+			// is open in a loading state, surface an empty result so it stops
+			// spinning instead of hanging on "Loading...".
+			if m.screen == screenWorkspacePicker && len(m.workspaces) == 0 {
+				m.workspace.SetWorkspaces(nil, m.workspaceID)
+			}
+			return m, nil
+		}
+		m.workspaces = msg.entries
+		m.workspacesAt = time.Now().UTC()
+		_ = config.SaveWorkspaces(config.WorkspaceCache{
+			Workspaces: msg.entries,
+			UpdatedAt:  m.workspacesAt,
+		})
+		// If the picker is currently open waiting on this fetch, refresh it
+		// in place so the loading state clears.
+		if m.screen == screenWorkspacePicker {
+			m.workspace.SetWorkspaces(m.workspaces, m.workspaceID)
+		}
+		return m, nil
+
+	case workspace.SelectMsg:
+		return m.switchWorkspace(msg.Workspace), nil
+
+	case workspace.CancelMsg:
+		if m.authenticated {
+			m.screen = screenChat
+		} else {
+			m.screen = screenLanding
+		}
 		return m, nil
 
 	case workspaceLoadedMsg:
@@ -316,6 +359,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authenticated = false
 		m.user = auth.User{}
 		_ = m.store.Clear()
+		_ = config.ClearWorkspaces()
+		m.workspaces = nil
+		m.workspacesAt = time.Time{}
 		m.chat.Clear()
 		reason := strings.TrimSpace(msg.reason)
 		if reason == "" {
@@ -335,6 +381,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmQuit = true
 			m.confirmQuitYes = false
 			return m, nil
+		}
+
+		if m.screen == screenWorkspacePicker {
+			updatedPicker, cmd := m.workspace.Update(msg)
+			m.workspace = updatedPicker
+			return m, cmd
 		}
 
 		if m.screen == screenLogin {
@@ -362,7 +414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleEnter(), nil
 		case keySwitchWorkspace:
 			if m.authenticated && m.screen == screenChat {
-				m.screen = screenWorkspacePicker
+				m.openWorkspacePicker()
 			}
 			return m, nil
 		case keyClearChat:
@@ -394,6 +446,10 @@ func (m Model) View() tea.View {
 	}
 
 	base := m.frame(content)
+
+	if m.screen == screenWorkspacePicker {
+		base = m.overlayWorkspacePicker(base)
+	}
 
 	if m.confirmQuit {
 		base = m.overlayQuitDialog(base)
@@ -560,8 +616,6 @@ func (m Model) handleEnter() Model {
 		} else {
 			m.screen = screenLogin
 		}
-	case screenWorkspacePicker:
-		m.screen = screenChat
 	}
 
 	return m
@@ -573,10 +627,8 @@ func (m Model) viewScreen() string {
 		return m.splashView()
 	case screenLogin:
 		return m.login.View(m.theme, m.width)
-	case screenChat:
+	case screenChat, screenWorkspacePicker:
 		return m.chat.View(m.theme, m.workspaceName, m.width)
-	case screenWorkspacePicker:
-		return m.workspace.View(m.theme, m.width)
 	default:
 		return m.landing.View(m.theme, m.width)
 	}
