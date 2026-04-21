@@ -7,7 +7,8 @@
 - [x] Figure out how to have it such that the answers show up as scrollabele text
 - [x] Figure out how to display different tables and types like that when the results are loaded from the API
 - [x] Build the switching between workspaces UI
-- [ ] test it on other terminals
+- [x] test it on other terminals
+- [x] Figure out a means of properly storing the credentials from the users
 - [ ] Figure out how to not be able to revert the binary file
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Add a better means of authenticating the user in the auth backend
