@@ -13,15 +13,15 @@ import (
 )
 
 // glamourCache memoizes TermRenderer instances per word-wrap width so we
-// avoid rebuilding the markdown pipeline on every redraw.
+// avoid rebuilding the markdown pipeline on every redraw. The renderers
+// hold mutable internal state (e.g. glamour's BlockStack) and are not safe
+// for concurrent use, so all access goes through glamourMu.
 var (
 	glamourMu    sync.Mutex
 	glamourCache = map[int]*glamour.TermRenderer{}
 )
 
 func glamourRenderer(width int) *glamour.TermRenderer {
-	glamourMu.Lock()
-	defer glamourMu.Unlock()
 	if r, ok := glamourCache[width]; ok {
 		return r
 	}
@@ -79,6 +79,10 @@ func renderRichText(th theme.Theme, width int, content string) string {
 		return ""
 	}
 	wrap := max(width-8, 20)
+	// Lookup and Render are both protected because the cached renderer
+	// holds mutable state and is not safe for concurrent use.
+	glamourMu.Lock()
+	defer glamourMu.Unlock()
 	if r := glamourRenderer(wrap); r != nil {
 		if out, err := r.Render(trimmed); err == nil {
 			// Glamour adds leading/trailing blank lines for breathing room
