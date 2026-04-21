@@ -9,9 +9,9 @@
 - [x] Build the switching between workspaces UI
 - [x] test it on other terminals
 - [x] Figure out a means of properly storing the credentials from the users
-- [ ] Figure out how to not be able to revert the binary file
+- [x] Figure out how to not be able to revert the binary file
+- [x] Add a better means of authenticating the user in the auth backend
 - [ ] Figure out how to add new workspaces from the UI
-- [ ] Add a better means of authenticating the user in the auth backend
 - [ ] Figure out how to run shell commands in the chat
 - [ ] think about the ability to prepend some things like an md file to the prompts that you send to Alan
 - [ ] Figure out how to display the content as it streams, particularly the thinking process.

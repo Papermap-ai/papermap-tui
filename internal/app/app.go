@@ -16,7 +16,6 @@ import (
 	"github.com/papermap/papermap-tui/internal/auth"
 	"github.com/papermap/papermap-tui/internal/config"
 	"github.com/papermap/papermap-tui/internal/theme"
-	uitauth "github.com/papermap/papermap-tui/internal/ui/auth"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
@@ -28,7 +27,6 @@ type screen string
 const (
 	screenSplash          screen = "splash"
 	screenLanding         screen = "landing"
-	screenLogin           screen = "login"
 	screenChat            screen = "chat"
 	screenWorkspacePicker screen = "workspace_picker"
 )
@@ -48,11 +46,6 @@ type startupMsg struct {
 	client        *api.Client
 	workspace     *api.UnifiedWorkspace
 	err           error
-}
-
-type loginResultMsg struct {
-	workspace *api.UnifiedWorkspace
-	err       string
 }
 
 type workspaceLoadedMsg struct {
@@ -113,6 +106,10 @@ type Model struct {
 	workspacesAt     time.Time
 	user             auth.User
 	startupErr       error
+	// landingMessage replaces the default landing copy when set. Used to
+	// surface "not signed in" and "session expired" prompts that point
+	// users at `papermap auth login`.
+	landingMessage   string
 	client           *api.Client
 	stream           *api.InsightStream
 	pendingResponse  *api.InsightResponse
@@ -121,7 +118,6 @@ type Model struct {
 	sseComplete      bool
 	theme            theme.Theme
 	landing          landing.Model
-	login            uitauth.Model
 	chat             chat.Model
 	workspace        workspace.Model
 	store            *auth.TokenStore
@@ -159,7 +155,6 @@ func NewModel() (Model, error) {
 		workspaceName: "Unified Workspace",
 		theme:         th,
 		landing:       landing.NewModel(),
-		login:         uitauth.NewModel(),
 		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
 		workspaces:    cache.Workspaces,
@@ -190,6 +185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, loadWorkspacesCmd(m.client)
 			}
 		} else {
+			m.landingMessage = "You're not signed in to Papermap."
 			m.screen = screenLanding
 		}
 		return m, nil
@@ -213,28 +209,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updatedChat, cmd := m.chat.Update(msg)
 		m.chat = updatedChat
 		return m, cmd
-
-	case uitauth.SubmitMsg:
-		m.login.SetSubmitting(true)
-		return m, m.initiateLogin(msg)
-
-	case loginResultMsg:
-		if msg.err != "" {
-			m.login.SetError(msg.err)
-			return m, nil
-		}
-
-		m.login.Reset()
-		m.authenticated = true
-		if cred, err := m.store.Load(); err == nil {
-			m.user = cred.User
-		}
-		m.applyWorkspace(msg.workspace)
-		m.screen = screenChat
-		m.closeStream()
-		m.resetInsightState()
-		m.chat.Clear()
-		return m, loadWorkspacesCmd(m.client)
 
 	case workspacesLoadedMsg:
 		if msg.err != nil || len(msg.entries) == 0 {
@@ -364,12 +338,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat.Clear()
 		reason := strings.TrimSpace(msg.reason)
 		if reason == "" {
-			reason = "Your session expired. Please sign in again."
+			reason = "Your session expired. Run `papermap auth login` to sign in again."
 		}
-		m.login.Reset()
-		m.login.SetError(reason)
-		m.screen = screenLogin
-		return m, nil
+		m.landingMessage = reason
+		m.screen = screenLanding
+		return m, tea.Quit
 
 	case tea.KeyPressMsg:
 		if m.confirmQuit {
@@ -388,14 +361,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		if m.screen == screenLogin {
-			if msg.String() == keyEscape {
-				return m.handleEscape(), nil
-			}
-
-			updatedLogin, cmd := m.login.Update(msg)
-			m.login = updatedLogin
-			return m, cmd
+		if m.screen == screenLanding && !m.authenticated {
+			// Unauthenticated landing is a terminal screen; any key quits
+			// so the user can run `papermap auth login`.
+			return m, tea.Quit
 		}
 
 		if m.screen == screenChat {
@@ -594,7 +563,7 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 
 func (m Model) handleEscape() Model {
 	switch m.screen {
-	case screenLogin, screenWorkspacePicker:
+	case screenWorkspacePicker:
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
@@ -608,13 +577,8 @@ func (m Model) handleEscape() Model {
 }
 
 func (m Model) handleEnter() Model {
-	switch m.screen {
-	case screenLanding:
-		if m.authenticated {
-			m.screen = screenChat
-		} else {
-			m.screen = screenLogin
-		}
+	if m.screen == screenLanding && m.authenticated {
+		m.screen = screenChat
 	}
 
 	return m
@@ -624,12 +588,10 @@ func (m Model) viewScreen() string {
 	switch m.screen {
 	case screenSplash:
 		return m.splashView()
-	case screenLogin:
-		return m.login.View(m.theme, m.width)
 	case screenChat, screenWorkspacePicker:
 		return m.chat.View(m.theme, m.workspaceName, m.width)
 	default:
-		return m.landing.View(m.theme, m.width)
+		return m.landing.View(m.theme, m.width, m.landingMessage)
 	}
 }
 
@@ -674,35 +636,6 @@ func (m Model) tooSmallView() string {
 	}
 	content := strings.Join(lines, "\n")
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
-}
-
-func (m Model) initiateLogin(msg uitauth.SubmitMsg) tea.Cmd {
-	return func() tea.Msg {
-		if m.client == nil {
-			return loginResultMsg{err: "API client is not ready yet."}
-		}
-
-		result, err := m.client.Login(context.Background(), msg.Email, msg.Password)
-		if err != nil {
-			return loginResultMsg{err: err.Error()}
-		}
-
-		cred, err := result.ToCredentials(auth.Credentials{})
-		if err != nil {
-			return loginResultMsg{err: err.Error()}
-		}
-
-		if err := m.store.Save(cred); err != nil {
-			return loginResultMsg{err: err.Error()}
-		}
-
-		workspace, err := loadUnifiedWorkspaceContext(context.Background(), m.client)
-		if err != nil {
-			return loginResultMsg{err: err.Error()}
-		}
-
-		return loginResultMsg{workspace: workspace}
-	}
 }
 
 func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
