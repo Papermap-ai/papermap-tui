@@ -24,10 +24,12 @@ The UI should feel purpose-built for Papermap, not like a generic demo TUI.
 Organize UI by screen or focused component:
 
 - `landing/` for first-run and signed-out experience.
-- `auth/` for login-specific UI.
 - `chat/` for prompt input, transcript, and streamed responses.
 - `workspace/` for switching and selection flows.
 - `components/` for shared presentational building blocks.
+
+Authentication UI lives in `internal/cli/auth` (huh-based CLI prompts),
+not under `internal/ui`. The TUI never collects credentials.
 
 Keep reusable components small and boring. Do not create a component library
 for its own sake.
@@ -40,12 +42,12 @@ for its own sake.
 - Avoid hidden shared mutable state across models.
 - Use focused sub-models only when they reduce complexity.
 
-For async work such as login, workspace loading, or streaming insight results,
+For async work such as workspace loading or streaming insight results,
 model the pending, success, and error states explicitly.
 
 ## Layout Guidance
 
-- Prefer centered layouts for landing and login flows.
+- Prefer centered layouts for the landing flow.
 - Use stable spacing and alignment over decorative complexity.
 - Preserve readable margins on wide terminals.
 - On smaller terminals, degrade gracefully instead of forcing exact mockups.
@@ -91,6 +93,8 @@ If a rich rendering path becomes fragile, prefer a simpler readable fallback.
 
 - Add rendering tests for important views once UI code exists.
 - Prefer deterministic view output for golden or snapshot tests.
+- Use `internal/teatest.FindMsg[T]` to extract specific messages from
+  batched commands when asserting on Bubble Tea Update output.
 - If using `catwalk`, keep snapshots focused and intentional.
 - Test narrow and wide terminal layouts for critical screens.
 

@@ -13,16 +13,20 @@ well over broader feature coverage.
 
 ## Current Status
 
-This repository is in early implementation. The initial plan lives in
-`Plans/initial_plan.md`. 
+The MVP scope is implemented end-to-end. Authentication runs as CLI
+subcommands (`papermap auth login | logout | whoami`) outside the Bubble
+Tea program. Launching `papermap` lands directly in the unified workspace
+when a session exists, otherwise it prints a sign-in prompt and exits.
 
-When making architecture decisions, align with the MVP scope from the plan:
+The initial plan lives in `Plans/initial_plan.md`.
 
-- Email/password login directly in the TUI.
+When making architecture decisions, align with the MVP scope:
+
+- Authentication via `papermap auth` CLI subcommands (huh-based prompts).
 - Unified workspace as the default landing experience.
 - Streaming insight responses in the terminal.
-- Configurable API base URL via config file and environment variable.
-- Lightweight distribution path with `go install` first.
+- Configurable API base URL via config file, env var, or `--api-url` flag.
+- Lightweight distribution: `go install`, `install.sh`, GoReleaser.
 
 Do not quietly expand scope into dashboard editing, billing, multi-user
 collaboration, or broad workspace/data-source management unless explicitly
@@ -33,10 +37,12 @@ requested.
 - Module path: `github.com/papermap/papermap-tui`.
 - Language: Go 1.26+.
 - UI framework: `charm.land/bubbletea/v2`.
+- Forms / prompts: `charm.land/huh/v2` (used by the `auth` CLI).
 - Styling: `charm.land/lipgloss/v2`.
 - Markdown rendering: `charm.land/glamour/v2`.
 - Additional UI components: Bubbles when needed.
 - HTTP and streaming: standard library `net/http` and SSE handling.
+- Credential storage: `github.com/99designs/keyring` with file fallback.
 
 ## Architecture Direction
 
@@ -47,18 +53,23 @@ cmd/papermap/main.go
 internal/app/
 internal/api/
 internal/auth/
+internal/cli/auth/
 internal/config/
+internal/teatest/
 internal/theme/
 internal/ui/
 ```
 
 Preferred responsibilities:
 
-- `cmd/papermap`: CLI entry point.
+- `cmd/papermap`: CLI entry point and subcommand dispatch.
 - `internal/app`: root Bubble Tea model, app state, routing, key handling.
 - `internal/api`: backend client and Papermap endpoint integrations.
-- `internal/auth`: login, token refresh, credential persistence.
+- `internal/auth`: credential persistence (keyring + file fallback) and
+  token expiry parsing.
+- `internal/cli/auth`: `papermap auth login | logout | whoami` flows.
 - `internal/config`: config loading and environment override handling.
+- `internal/teatest`: shared Bubble Tea test helpers.
 - `internal/theme`: shared lipgloss styles and layout constants.
 - `internal/ui`: screen-level UI models and reusable UI components.
 
@@ -71,16 +82,15 @@ The experience should feel keyboard-first, branded, minimal, and polished.
 
 Baseline screens:
 
-- Landing.
-- Login.
-- Main chat / insight screen.
+- Landing (also used as the signed-out exit screen).
+- Main chat / insight screen (default landing when authenticated).
 - Workspace picker.
 
 Default MVP assumptions:
 
-- Landing should guide the user into authentication or directly into the main
-  workspace if already authenticated.
-- The unified workspace should be the default workspace after login.
+- Authentication happens out-of-band via `papermap auth login` before the
+  TUI starts. The TUI itself does not collect credentials.
+- The unified workspace is the default workspace after launch.
 - Insight responses should stream when possible.
 - Output should remain terminal-friendly: markdown, summaries, and readable
   tables.
@@ -111,30 +121,36 @@ missing.
 
 ### Config
 
-Configuration should be loaded from:
+Configuration is loaded from, in precedence order:
 
-- `~/.papermap/config.yaml`
-- `PAPERMAP_API_URL`
+1. `--api-url` flag (root or `auth login`).
+2. `PAPERMAP_API_URL` environment variable.
+3. `~/.papermap/config.yaml`.
+4. Built-in default (`https://dev.dataapi.papermap.ai`).
 
-Environment variables should override file configuration.
+Cached workspace metadata lives in `~/.papermap/workspaces.json` and is
+cleared on logout.
 
 Prefer passing config through constructors or app state. Do not introduce
 package-level mutable configuration state unless there is a very strong reason.
 
 ### Auth And Credentials
 
-Credential storage path:
-
-- `~/.papermap/credentials`
+Credentials are stored in the OS keyring (Keychain, Secret Service,
+WinCred, KWallet) via `github.com/99designs/keyring`. When no supported
+backend is available, or when `PAPERMAP_FORCE_FILE_STORE=1` is set, the
+file fallback is used at `~/.papermap/credentials`.
 
 Requirements:
 
-- File permissions must be `0o600`.
+- File fallback permissions must be `0o600`.
 - Never log tokens, passwords, or credential payloads.
-- Mask password input in the UI.
+- Mask password input in CLI prompts (huh `EchoModePassword`).
 - Zero password bytes after use when practical.
 - Check token expiry before API calls when auth state exists.
 - Attempt token refresh before forcing re-authentication.
+- On logout, attempt remote revoke, then clear local credentials and the
+  workspace cache.
 
 ### API Client
 
@@ -166,20 +182,29 @@ app into too many tiny abstractions too early.
 
 ## Build, Run, And Release
 
-Current build tool choice: Makefile.
+The project uses a `Makefile` plus GoReleaser for releases.
 
-Preferred commands once targets exist:
+Common commands:
 
-- Build: `go build .` or `make build`
-- Run: `go run ./cmd/papermap` or `make run`
-- Test: `go test ./...` or `make test`
-- Format: `gofumpt -w .` or `make fmt`
-- Lint: project-specific lint target if added
+- Build: `make build` (writes `bin/papermap`)
+- Run: `make run`
+- Test: `make test` (race + count=1)
+- Format: `make fmt` (gofumpt + goimports)
+- Lint: `make lint` (golangci-lint v2)
+- Install git hooks: `make hooks`
+- Snapshot release: `make release-snapshot`
+- Clean: `make clean`
 
-Distribution expectations:
+The pre-commit hook runs `make lint`, so local commits will fail if lint
+fails. CI runs lint, test (ubuntu + macOS), and build on every push and PR
+to `main`.
 
-- Phase 1: `go install github.com/papermap/papermap-tui/cmd/papermap@latest`
-- Phase 2: GitHub Releases and Homebrew tap
+Distribution paths:
+
+- `go install github.com/papermap/papermap-tui/cmd/papermap@latest`
+- `curl -sSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh`
+- GitHub Releases via GoReleaser (darwin/linux × amd64/arm64).
+- Homebrew tap (planned).
 
 Prefer implementation choices that keep cross-platform builds simple.
 
