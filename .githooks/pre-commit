@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+# Papermap TUI pre-commit hook.
+# Runs `make lint` so style/correctness issues are caught before commit.
+# Bypass with `git commit --no-verify` if absolutely necessary.
+
+set -e
+
+if ! command -v make >/dev/null 2>&1; then
+    echo "pre-commit: make not installed; skipping lint." >&2
+    exit 0
+fi
+
+if ! command -v golangci-lint >/dev/null 2>&1; then
+    echo "pre-commit: golangci-lint not installed." >&2
+    echo "  Install: https://golangci-lint.run/usage/install/" >&2
+    exit 1
+fi
+
+echo "pre-commit: running make lint..."
+make lint
