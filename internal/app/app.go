@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -585,7 +584,7 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 
 		return true, nil
 
-	case errors.Is(err, os.ErrNotExist):
+	case errors.Is(err, auth.ErrNoCredentials):
 		return false, nil
 
 	default:
