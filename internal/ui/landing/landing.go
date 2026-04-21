@@ -15,20 +15,38 @@ func NewModel() Model {
 	return Model{}
 }
 
-func (Model) View(th theme.Theme, width int) string {
+// View renders the landing screen. When message is empty, the default
+// signed-in tagline + prompt is shown. When message is non-empty, it
+// replaces the body copy to surface "not signed in" or "session expired"
+// guidance pointing the user at `papermap auth login`.
+func (Model) View(th theme.Theme, width int, message string) string {
 	panelWidth := clampWidth(width, 62)
 
 	centerInPanel := func(rendered string) string {
 		return lipgloss.PlaceHorizontal(panelWidth, lipgloss.Center, rendered)
 	}
 
-	panel := strings.Join([]string{
-		centerInPanel(th.Body.Render("Sign in with your Papermap account to continue.")),
-		"",
-		centerInPanel(th.Accent.Render("Press Enter to sign in")),
-		"",
-		centerInPanel(th.KeyHint.Render("Enter sign in  •  Ctrl+C quit")),
-	}, "\n")
+	body := strings.TrimSpace(message)
+	var panelLines []string
+	if body == "" {
+		panelLines = []string{
+			centerInPanel(th.Body.Render("You're signed in to Papermap.")),
+			"",
+			centerInPanel(th.Accent.Render("Press Enter to open your workspace")),
+			"",
+			centerInPanel(th.KeyHint.Render("Enter open  •  Ctrl+C quit")),
+		}
+	} else {
+		panelLines = []string{
+			centerInPanel(th.Body.Render(body)),
+			"",
+			centerInPanel(th.Accent.Render("Run `papermap auth login` to continue")),
+			"",
+			centerInPanel(th.KeyHint.Render("Any key quit")),
+		}
+	}
+
+	panel := strings.Join(panelLines, "\n")
 
 	tagline := lipgloss.PlaceHorizontal(
 		panelWidth,
