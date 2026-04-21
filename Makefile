@@ -13,7 +13,7 @@ logout:
 
 
 test:
-	go test ./...
+	go test ./... -race -count=1
 
 fmt:
 	gofmt -w cmd internal
