@@ -101,7 +101,7 @@ func TestStartInsightAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenInsightStream returned error: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	first, err := stream.Next()
 	if err != nil {

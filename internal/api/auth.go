@@ -75,7 +75,7 @@ func (c *Client) Login(ctx context.Context, email string, password string) (Auth
 	if err != nil {
 		return AuthTokens{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return decodeJSONResponse[AuthTokens](resp)
 }
@@ -92,7 +92,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (AuthTokens, 
 	if err != nil {
 		return AuthTokens{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return decodeJSONResponse[AuthTokens](resp)
 }
@@ -107,7 +107,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -127,7 +127,7 @@ func (c *Client) CurrentUser(ctx context.Context) (auth.User, error) {
 	if err != nil {
 		return auth.User{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return decodeJSONResponse[auth.User](resp)
 }

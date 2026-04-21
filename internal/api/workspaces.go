@@ -69,7 +69,7 @@ func (c *Client) UnifiedWorkspace(ctx context.Context) (*UnifiedWorkspace, error
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	decoded, err := decodeJSONResponse[unifiedWorkspaceEnvelope](resp)
 	if err != nil {
@@ -98,7 +98,7 @@ func (c *Client) IncludedWorkspaces(ctx context.Context, workspaceID string) ([]
 	if err != nil {
 		return nil, IncludedWorkspaceSettings{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	decoded, err := decodeJSONResponse[includedWorkspacesEnvelope](resp)
 	if err != nil {
@@ -168,7 +168,7 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceSummary, error)
 		}
 
 		decoded, err := decodeJSONResponse[paginatedWorkspacesEnvelope](resp)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +187,7 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceSummary, error)
 		if !decoded.HasMore && decoded.TotalPages == 0 && len(batch) < perPage {
 			break
 		}
-		if decoded.HasMore == false && decoded.TotalPages == 0 && len(batch) >= perPage {
+		if !decoded.HasMore && decoded.TotalPages == 0 && len(batch) >= perPage {
 			// Server didn't tell us anything useful and returned a full page;
 			// keep going but bounded by maxPages.
 			continue
@@ -211,7 +211,7 @@ func (c *Client) CreateChat(ctx context.Context, reqBody ChatCreateRequest) (*Ch
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	decoded, err := decodeJSONResponse[ChatCreateResponse](resp)
 	if err != nil {

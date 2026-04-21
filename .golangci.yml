@@ -1,32 +1,39 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofumpt
-    - goimports
     - misspell
     - unconvert
     - gocritic
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+  exclusions:
+    paths:
+      - bin
+      - dist
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/papermap/papermap-tui
-  gocritic:
-    disabled-checks:
-      - ifElseChain
-      - singleCaseSwitch
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/papermap/papermap-tui
 
 issues:
-  exclude-dirs:
-    - bin
-    - dist
   max-issues-per-linter: 0
   max-same-issues: 0

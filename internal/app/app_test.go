@@ -424,7 +424,7 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 		t.Fatal("expected submit to start insight command")
 	}
 
-	updated, _ = updated.(app.Model).Update(cmd())
+	_, _ = updated.(app.Model).Update(cmd())
 
 	if createCalls != 1 {
 		t.Fatalf("expected create chat called once, got %d", createCalls)

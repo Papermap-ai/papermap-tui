@@ -60,17 +60,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 		case "auth":
 			return runAuth(args[1:], stdout, stderr)
 		case "logout":
-			fmt.Fprintln(stderr, "papermap: 'logout' is deprecated; use 'papermap auth logout'")
+			_, _ = fmt.Fprintln(stderr, "papermap: 'logout' is deprecated; use 'papermap auth logout'")
 			return cliauth.RunLogout(context.Background(), stdout)
 		case "help", "-h", "--help":
-			fmt.Fprint(stdout, usage)
+			_, _ = fmt.Fprint(stdout, usage)
 			return nil
 		}
 	}
 
 	fs := flag.NewFlagSet("papermap", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, usage) }
+	fs.Usage = func() { _, _ = fmt.Fprint(stderr, usage) }
 
 	var (
 		showVersion bool
@@ -92,12 +92,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	switch {
 	case showVersion:
-		fmt.Fprintf(stdout, "papermap %s (commit %s, built %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(stdout, "papermap %s (commit %s, built %s)\n", version, commit, date)
 		return nil
 	case showUser:
 		if err := cliauth.RunWhoami(stdout); err != nil {
 			if errors.Is(err, cliauth.ErrNotSignedIn) {
-				fmt.Fprintln(stderr, "Not signed in. Run 'papermap auth login' to continue.")
+				_, _ = fmt.Fprintln(stderr, "Not signed in. Run 'papermap auth login' to continue.")
 				os.Exit(1)
 			}
 			return err
@@ -115,7 +115,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func runAuth(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "papermap auth: missing subcommand (login | logout | whoami)")
+		_, _ = fmt.Fprintln(stderr, "papermap auth: missing subcommand (login | logout | whoami)")
 		os.Exit(1)
 	}
 
@@ -144,17 +144,17 @@ func runAuth(args []string, stdout, stderr io.Writer) error {
 	case "whoami":
 		if err := cliauth.RunWhoami(stdout); err != nil {
 			if errors.Is(err, cliauth.ErrNotSignedIn) {
-				fmt.Fprintln(stderr, "Not signed in. Run 'papermap auth login' to continue.")
+				_, _ = fmt.Fprintln(stderr, "Not signed in. Run 'papermap auth login' to continue.")
 				os.Exit(1)
 			}
 			return err
 		}
 		return nil
 	case "-h", "--help", "help":
-		fmt.Fprint(stdout, usage)
+		_, _ = fmt.Fprint(stdout, usage)
 		return nil
 	default:
-		fmt.Fprintf(stderr, "papermap auth: unknown subcommand %q\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "papermap auth: unknown subcommand %q\n", args[0])
 		os.Exit(1)
 	}
 	return nil
