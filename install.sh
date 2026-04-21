@@ -9,9 +9,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 #
 # Usage (private repo, requires a GitHub token with repo:read access):
-#   GH_TOKEN=ghp_xxx sh -c "$(curl -fsSL \
-#       -H 'Authorization: Bearer ghp_xxx' \
-#       https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh)"
+#   export GH_TOKEN=ghp_xxx && curl -fsSL \
+#       -H "Authorization: Bearer $GH_TOKEN" \
+#       https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 #
 # Environment overrides:
 #   PREFIX        Installation root (default /usr/local or ~/.local)

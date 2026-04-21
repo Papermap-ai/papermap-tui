@@ -32,12 +32,10 @@ PREFIX=$HOME/.local VERSION=v0.0.1 \
 
 ### Private-repo install
 
-While the repo is private you need a GitHub personal access token with `repo:read` (classic) or `Contents: read` (fine-grained) scope. The token has to be passed twice — once to fetch `install.sh` from `raw.githubusercontent.com`, and once again so the script can authenticate against the GitHub API for release assets.
+While the repo is private you need a GitHub personal access token with `repo:read` (classic) or `Contents: read` (fine-grained) scope. Export it once and pipe the script through `sh` — the piped shell inherits `GH_TOKEN` from your environment automatically.
 
 ```bash
-GH_TOKEN=ghp_xxx sh -c "$(curl -fsSL \
-    -H 'Authorization: Bearer ghp_xxx' \
-    https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh)"
+export GH_TOKEN=ghp_xxx && curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
 
 `GITHUB_TOKEN` is accepted as an alias for `GH_TOKEN`.
