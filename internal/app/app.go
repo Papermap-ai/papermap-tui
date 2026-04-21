@@ -57,7 +57,6 @@ type insightStartedMsg struct {
 	chatID    string
 	requestID string
 	stream    *api.InsightStream
-	response  *api.InsightResponse
 	err       string
 }
 

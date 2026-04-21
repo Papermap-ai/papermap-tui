@@ -45,21 +45,20 @@ type Message struct {
 }
 
 type Model struct {
-	width            int
-	height           int
-	textarea         textarea.Model
-	viewport         viewport.Model
-	spinner          spinner.Model
-	messages         []Message
-	streaming        bool
-	streamStatus     string
-	err              string
-	chatID           string
-	requestID        string
-	activeResponse   int
-	theme            theme.Theme
-	contentNeedsSync bool
-	lastTAHeight     int
+	width          int
+	height         int
+	textarea       textarea.Model
+	viewport       viewport.Model
+	spinner        spinner.Model
+	messages       []Message
+	streaming      bool
+	streamStatus   string
+	err            string
+	chatID         string
+	requestID      string
+	activeResponse int
+	theme          theme.Theme
+	lastTAHeight   int
 }
 
 func NewModel(th theme.Theme) Model {

@@ -25,7 +25,7 @@ func RunWhoami(w io.Writer) error {
 	cred, err := store.Load()
 	switch {
 	case err == nil:
-		fmt.Fprintln(w, formatUser(cred.User))
+		_, _ = fmt.Fprintln(w, formatUser(cred.User))
 		return nil
 	case errors.Is(err, authstore.ErrNoCredentials):
 		return ErrNotSignedIn

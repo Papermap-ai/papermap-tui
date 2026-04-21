@@ -8,8 +8,10 @@ import (
 	"github.com/papermap/papermap-tui/internal/teatest"
 )
 
-type fooMsg struct{ N int }
-type barMsg struct{ S string }
+type (
+	fooMsg struct{ N int }
+	barMsg struct{ S string }
+)
 
 func TestFindMsgInBatch(t *testing.T) {
 	t.Parallel()

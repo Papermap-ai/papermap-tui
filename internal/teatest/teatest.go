@@ -28,8 +28,6 @@ func FindMsg[T tea.Msg](cmd tea.Cmd) (T, bool) {
 func findInMsg[T tea.Msg](msg tea.Msg) (T, bool) {
 	var zero T
 	switch v := msg.(type) {
-	case T:
-		return v, true
 	case tea.BatchMsg:
 		for _, c := range v {
 			if c == nil {
@@ -39,6 +37,8 @@ func findInMsg[T tea.Msg](msg tea.Msg) (T, bool) {
 				return got, true
 			}
 		}
+	case T:
+		return v, true
 	}
 	return zero, false
 }

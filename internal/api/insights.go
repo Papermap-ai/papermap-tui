@@ -109,11 +109,12 @@ func extractRawDataField(body []byte) json.RawMessage {
 		}
 		return nil
 	}
-
-	if trimmed[0] != '[' {
+	switch trimmed[0] {
+	case '[':
+		return dataBytes
+	default:
 		return nil
 	}
-	return dataBytes
 }
 
 type InsightStreamRequest struct {
@@ -167,7 +168,7 @@ func (c *Client) StartInsight(ctx context.Context, reqBody InsightRequest) (Insi
 	if err != nil {
 		return InsightResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	decoded, err := decodeJSONResponse[InsightResponse](resp)
 	if err != nil {
@@ -191,7 +192,7 @@ func (c *Client) OpenInsightStream(ctx context.Context, reqBody InsightStreamReq
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		if readErr != nil {
 			return nil, fmt.Errorf("read response: %w", readErr)
@@ -227,7 +228,7 @@ func (c *Client) GetChart(ctx context.Context, llmDataID string) (InsightRespons
 	if err != nil {
 		return InsightResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return decodeJSONResponse[InsightResponse](resp)
 }
@@ -696,9 +697,10 @@ func skipUntilClose(dec *json.Decoder, open json.Delim) error {
 			return err
 		}
 		if d, ok := tok.(json.Delim); ok {
-			if d == open {
+			switch d {
+			case open:
 				depth++
-			} else if d == close {
+			case close:
 				depth--
 			}
 		}

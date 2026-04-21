@@ -50,9 +50,7 @@ func newKeyringStore() (*keyringStore, error) {
 
 // openKeyring is the seam tests use to inject an in-memory backend. The
 // production path delegates straight to keyring.Open.
-var openKeyring = func(cfg keyring.Config) (keyring.Keyring, error) {
-	return keyring.Open(cfg)
-}
+var openKeyring = keyring.Open
 
 func (s *keyringStore) Kind() StoreKind { return StoreKindKeyring }
 

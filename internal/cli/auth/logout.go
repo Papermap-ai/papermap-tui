@@ -38,7 +38,7 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 				if clearErr := store.Clear(); clearErr != nil {
 					return fmt.Errorf("clear credentials: %w", clearErr)
 				}
-				fmt.Fprintln(w, "Logged out locally. Remote logout failed.")
+				_, _ = fmt.Fprintln(w, "Logged out locally. Remote logout failed.")
 				return nil
 			}
 		}
@@ -47,11 +47,11 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 			return fmt.Errorf("clear credentials: %w", err)
 		}
 		_ = config.ClearWorkspaces()
-		fmt.Fprintln(w, "Logged out successfully.")
+		_, _ = fmt.Fprintln(w, "Logged out successfully.")
 		return nil
 
 	case errors.Is(err, authstore.ErrNoCredentials):
-		fmt.Fprintln(w, "No local session found.")
+		_, _ = fmt.Fprintln(w, "No local session found.")
 		return nil
 
 	default:

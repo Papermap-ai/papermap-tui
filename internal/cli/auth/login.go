@@ -131,6 +131,6 @@ func runLoginWith(ctx context.Context, w io.Writer, deps LoginDeps, opts LoginOp
 	if display == "" {
 		display = strings.TrimSpace(email)
 	}
-	fmt.Fprintf(w, "Signed in as %s.\n", display)
+	_, _ = fmt.Fprintf(w, "Signed in as %s.\n", display)
 	return nil
 }
