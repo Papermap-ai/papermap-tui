@@ -102,7 +102,13 @@ func (m *Model) openWorkspacePicker() {
 
 // switchWorkspace tears down the current chat session and rebinds app state
 // to the selected workspace. The next prompt will create a fresh chat.
+// Re-selecting the active workspace is a no-op so the in-memory session
+// survives a round-trip through the picker.
 func (m Model) switchWorkspace(entry config.WorkspaceEntry) Model {
+	if entry.WorkspaceID != "" && entry.WorkspaceID == m.workspaceID {
+		m.screen = screenChat
+		return m
+	}
 	m.closeStream()
 	m.resetInsightState()
 	m.chat.Clear()
