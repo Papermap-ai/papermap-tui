@@ -1,7 +1,7 @@
 # Papermap TUI
 
-[![build](https://github.com/papermap/papermap-tui/actions/workflows/build.yml/badge.svg)](https://github.com/papermap/papermap-tui/actions/workflows/build.yml)
-[![release](https://github.com/papermap/papermap-tui/actions/workflows/release.yml/badge.svg)](https://github.com/papermap/papermap-tui/actions/workflows/release.yml)
+[![build](https://github.com/Papermap-ai/papermap-tui/actions/workflows/build.yml/badge.svg)](https://github.com/Papermap-ai/papermap-tui/actions/workflows/build.yml)
+[![release](https://github.com/Papermap-ai/papermap-tui/actions/workflows/release.yml/badge.svg)](https://github.com/Papermap-ai/papermap-tui/actions/workflows/release.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/papermap/papermap-tui.svg)](https://pkg.go.dev/github.com/papermap/papermap-tui)
 [![Go Report Card](https://goreportcard.com/badge/github.com/papermap/papermap-tui)](https://goreportcard.com/report/github.com/papermap/papermap-tui)
 
@@ -16,7 +16,7 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](
 ### Install script (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/papermap/papermap-tui/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
 
 The script downloads the latest release, verifies its SHA256 checksum, and installs to `/usr/local/bin` or `~/.local/bin`.
@@ -25,7 +25,7 @@ Override the install prefix or version:
 
 ```bash
 PREFIX=$HOME/.local VERSION=v0.1.0 \
-    curl -fsSL https://raw.githubusercontent.com/papermap/papermap-tui/main/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
 
 ### Go install
@@ -37,7 +37,7 @@ go install github.com/papermap/papermap-tui/cmd/papermap@latest
 ### From source
 
 ```bash
-git clone https://github.com/papermap/papermap-tui.git
+git clone https://github.com/Papermap-ai/papermap-tui.git
 cd papermap-tui
 make build
 ./bin/papermap

@@ -6,16 +6,16 @@
 # $PREFIX/bin (default: /usr/local or ~/.local).
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/papermap/papermap-tui/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 #
 # Environment overrides:
 #   PREFIX   Installation root (default /usr/local or ~/.local)
 #   VERSION  Release tag to install (default: latest)
-#   REPO     GitHub repo (default papermap/papermap-tui)
+#   REPO     GitHub repo (default Papermap-ai/papermap-tui)
 
 set -eu
 
-REPO="${REPO:-papermap/papermap-tui}"
+REPO="${REPO:-Papermap-ai/papermap-tui}"
 VERSION="${VERSION:-latest}"
 
 err() {
