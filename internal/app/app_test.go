@@ -91,16 +91,15 @@ func TestStartupWithValidCredentialsRoutesToChat(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(startupForTest(t, model))
-	if cmd != nil {
-		t.Fatal("expected no follow-up command from startup update")
-	}
+	// Drain any follow-up command (e.g. workspace pagination) without
+	// executing it; tests scope assertions to the synchronous startup result.
+	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Ask Papermap") {
-		t.Fatalf("expected chat view after valid startup, got %q", view)
-	}
-	if !strings.Contains(view, "Kwabena's Unified Space") {
-		t.Fatalf("expected unified workspace name in view, got %q", view)
+	// Workspace label only appears on the chat screen; landing has no
+	// per-workspace heading, so this confirms we routed past landing.
+	if !strings.Contains(view, "Workspace: Kwabena's Unified Space") {
+		t.Fatalf("expected chat empty-state with workspace label after valid startup, got %q", view)
 	}
 }
 
@@ -149,9 +148,9 @@ func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(startupForTest(t, model))
-	if cmd != nil {
-		t.Fatal("expected no follow-up command from startup update")
-	}
+	// Drain any follow-up command (e.g. workspace pagination) without
+	// executing it; tests scope assertions to the synchronous startup result.
+	_ = cmd
 
 	view := updated.(app.Model).View().Content
 	if !strings.Contains(view, "Unified Workspace") {
@@ -233,13 +232,13 @@ func TestStartupRefreshesExpiredCredentials(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(startupForTest(t, model))
-	if cmd != nil {
-		t.Fatal("expected no follow-up command from startup update")
-	}
+	// Drain any follow-up command (e.g. workspace pagination) without
+	// executing it; tests scope assertions to the synchronous startup result.
+	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Ask Papermap") {
-		t.Fatalf("expected chat view after refresh, got %q", view)
+	if !strings.Contains(view, "Workspace: Kwabena's Unified Space") {
+		t.Fatalf("expected chat empty-state with workspace label after refresh, got %q", view)
 	}
 
 	updatedCred, err := store.Load()
@@ -292,12 +291,12 @@ func TestStartupClearsExpiredCredentialsWhenRefreshFails(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(startupForTest(t, model))
-	if cmd != nil {
-		t.Fatal("expected no follow-up command from startup update")
-	}
+	// Drain any follow-up command (e.g. workspace pagination) without
+	// executing it; tests scope assertions to the synchronous startup result.
+	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Terminal-native insights") {
+	if !strings.Contains(view, "Focused terminal access to Papermap insights") {
 		t.Fatalf("expected landing view after failed refresh, got %q", view)
 	}
 
@@ -415,9 +414,9 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 	}
 
 	updated, cmd := model.Update(startupForTest(t, model))
-	if cmd != nil {
-		t.Fatal("expected no follow-up command from startup update")
-	}
+	// Drain any follow-up command (e.g. workspace pagination) without
+	// executing it; tests scope assertions to the synchronous startup result.
+	_ = cmd
 
 	startedModel := updated.(app.Model)
 	updated, cmd = startedModel.Update(chat.SubmitMsg{Prompt: "Show revenue"})
@@ -447,12 +446,11 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 func startupForTest(t *testing.T, model app.Model) any {
 	t.Helper()
 
-	cmd := model.Init()
-	if cmd == nil {
-		t.Fatal("expected startup command")
+	msg, ok := app.StartupMsgFromInit(model)
+	if !ok {
+		t.Fatal("expected startupMsg from Init")
 	}
-
-	return cmd()
+	return msg
 }
 
 func jwtForTest(expiresAt time.Time) string {
