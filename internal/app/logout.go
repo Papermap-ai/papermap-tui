@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/auth"
@@ -48,7 +47,7 @@ func Logout() (string, error) {
 
 		return "Logged out successfully.", nil
 
-	case errors.Is(err, os.ErrNotExist):
+	case errors.Is(err, auth.ErrNoCredentials):
 		return "No local session found.", nil
 
 	default:

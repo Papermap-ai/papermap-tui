@@ -2,22 +2,17 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
 
-var (
-	ErrInsecurePermissions = errors.New("credentials file permissions must be 0600")
-	// ErrSessionExpired indicates that the stored credentials have expired and
-	// could not be refreshed. The caller should clear state and prompt the
-	// user to sign in again.
-	ErrSessionExpired = errors.New("session expired")
-)
+// ErrSessionExpired indicates that the stored credentials have expired and
+// could not be refreshed. The caller should clear state and prompt the
+// user to sign in again.
+var ErrSessionExpired = errors.New("session expired")
 
 // refreshSkew keeps a small safety margin so we refresh slightly before the
 // token actually expires. This avoids races where a request starts just
@@ -57,25 +52,57 @@ func (c Credentials) ValidWithSkew(skew time.Duration) bool {
 	return c.AccessToken != "" && time.Now().Add(skew).Before(c.ExpiresAt)
 }
 
+// TokenStore is the public auth-state facade. Internally it delegates to
+// a CredentialStore (keyring or file fallback) for persistence; callers
+// keep using TokenStore so the rest of the app stays decoupled from the
+// backend choice.
 type TokenStore struct {
-	path      string
 	mu        sync.Mutex
-	cred      Credentials
-	load      bool
+	backend   CredentialStore
 	refresher Refresher
 }
 
-func NewTokenStore(path string) *TokenStore {
-	return &TokenStore{path: path}
+// NewTokenStoreWithBackend builds a TokenStore over an explicit backend.
+// Tests use this with an in-memory store; production code uses
+// DefaultStore which selects keyring-or-file via the factory.
+func NewTokenStoreWithBackend(backend CredentialStore) *TokenStore {
+	return &TokenStore{backend: backend}
 }
 
-func DefaultStore() (*TokenStore, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
-	}
+// NewTokenStore preserves the legacy constructor signature: build a
+// TokenStore that persists to the given file path. Kept so existing
+// callers and tests don't need to change.
+func NewTokenStore(path string) *TokenStore {
+	return NewTokenStoreWithBackend(newFileStore(path))
+}
 
-	return NewTokenStore(filepath.Join(homeDir, ".papermap", "credentials")), nil
+// DefaultStore returns the production TokenStore: keyring first, file
+// fallback under $HOME/.papermap/credentials. Setting the environment
+// variable PAPERMAP_FORCE_FILE_STORE=1 skips the keyring probe and uses
+// the file backend directly. Useful for tests, CI, and headless or
+// sandboxed environments where probing the keyring is undesirable.
+func DefaultStore() (*TokenStore, error) {
+	backend, err := NewCredentialStore(StoreOptions{
+		ForceFile: forceFileFromEnv(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return NewTokenStoreWithBackend(backend), nil
+}
+
+func forceFileFromEnv() bool {
+	switch os.Getenv("PAPERMAP_FORCE_FILE_STORE") {
+	case "1", "true", "TRUE", "yes":
+		return true
+	}
+	return false
+}
+
+// Kind reports which storage backend the underlying CredentialStore uses.
+// Callers can surface this in diagnostics or settings UI.
+func (s *TokenStore) Kind() StoreKind {
+	return s.backend.Kind()
 }
 
 // SetRefresher wires a refresher into the store. Safe to call at any time;
@@ -94,9 +121,9 @@ func (s *TokenStore) AccessToken(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cred, err := s.loadLocked()
+	cred, err := s.backend.Load()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, ErrNoCredentials) {
 			return "", nil
 		}
 		return "", err
@@ -111,13 +138,13 @@ func (s *TokenStore) AccessToken(ctx context.Context) (string, error) {
 		return cred.AccessToken, nil
 	}
 	if cred.RefreshToken == "" {
-		_ = s.clearLocked()
+		_ = s.backend.Clear()
 		return "", ErrSessionExpired
 	}
 
 	refreshed, err := s.refresher.Refresh(ctx, cred.RefreshToken)
 	if err != nil {
-		_ = s.clearLocked()
+		_ = s.backend.Clear()
 		return "", fmt.Errorf("%w: %v", ErrSessionExpired, err)
 	}
 
@@ -126,84 +153,40 @@ func (s *TokenStore) AccessToken(ctx context.Context) (string, error) {
 		refreshed.User = cred.User
 	}
 
-	if err := s.saveLocked(refreshed); err != nil {
+	if err := s.backend.Save(refreshed); err != nil {
 		return "", err
 	}
 
 	return refreshed.AccessToken, nil
 }
 
+// Load returns the persisted credentials, or the zero value plus
+// ErrNoCredentials when nothing is stored. The zero-value-on-missing path
+// makes it easy to branch on "are we logged in" without unwrapping.
 func (s *TokenStore) Load() (Credentials, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadLocked()
-}
-
-func (s *TokenStore) loadLocked() (Credentials, error) {
-	info, err := os.Stat(s.path)
+	cred, err := s.backend.Load()
 	if err != nil {
+		if errors.Is(err, ErrNoCredentials) {
+			return Credentials{}, err
+		}
 		return Credentials{}, err
 	}
-
-	if info.Mode().Perm() != 0o600 {
-		return Credentials{}, ErrInsecurePermissions
-	}
-
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return Credentials{}, fmt.Errorf("read credentials: %w", err)
-	}
-
-	var cred Credentials
-	if err := json.Unmarshal(data, &cred); err != nil {
-		return Credentials{}, fmt.Errorf("decode credentials: %w", err)
-	}
-
-	s.cred = cred
-	s.load = true
-
 	return cred, nil
 }
 
+// Save persists the given credentials.
 func (s *TokenStore) Save(cred Credentials) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.saveLocked(cred)
+	return s.backend.Save(cred)
 }
 
-func (s *TokenStore) saveLocked(cred Credentials) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("create credentials directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(cred, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode credentials: %w", err)
-	}
-
-	if err := os.WriteFile(s.path, data, 0o600); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
-	}
-
-	s.cred = cred
-	s.load = true
-
-	return nil
-}
-
+// Clear removes the persisted credentials. Returns nil when nothing is
+// stored, matching the existing logout behavior.
 func (s *TokenStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.clearLocked()
-}
-
-func (s *TokenStore) clearLocked() error {
-	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove credentials: %w", err)
-	}
-
-	s.cred = Credentials{}
-	s.load = false
-
-	return nil
+	return s.backend.Clear()
 }
