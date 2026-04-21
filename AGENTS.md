@@ -31,7 +31,7 @@ requested.
 ## Module And Stack
 
 - Module path: `github.com/papermap/papermap-tui`.
-- Language: Go 1.22+.
+- Language: Go 1.26+.
 - UI framework: `charm.land/bubbletea/v2`.
 - Styling: `charm.land/lipgloss/v2`.
 - Markdown rendering: `charm.land/glamour/v2`.
