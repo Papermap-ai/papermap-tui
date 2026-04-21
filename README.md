@@ -15,6 +15,8 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](
 
 ### Install script (Linux / macOS)
 
+> **Heads up — repo is private right now.** Both the install script and `go install` need a GitHub token until the repo is public. See [Private-repo install](#private-repo-install) below. Once the repo is public, the plain commands in this section will Just Work and the token plumbing in `install.sh` should be removed (search for `TODO(public-repo)` in `install.sh`).
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
@@ -24,14 +26,35 @@ The script downloads the latest release, verifies its SHA256 checksum, and insta
 Override the install prefix or version:
 
 ```bash
-PREFIX=$HOME/.local VERSION=v0.1.0 \
+PREFIX=$HOME/.local VERSION=v0.0.1 \
     curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
+
+### Private-repo install
+
+While the repo is private you need a GitHub personal access token with `repo:read` (classic) or `Contents: read` (fine-grained) scope. The token has to be passed twice — once to fetch `install.sh` from `raw.githubusercontent.com`, and once again so the script can authenticate against the GitHub API for release assets.
+
+```bash
+GH_TOKEN=ghp_xxx sh -c "$(curl -fsSL \
+    -H 'Authorization: Bearer ghp_xxx' \
+    https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh)"
+```
+
+`GITHUB_TOKEN` is accepted as an alias for `GH_TOKEN`.
+
+Treat the token like a password: don't paste it into shared docs or commit it. Revoke it from <https://github.com/settings/tokens> when you're done.
 
 ### Go install
 
 ```bash
 go install github.com/papermap/papermap-tui/cmd/papermap@latest
+```
+
+While the repo is private, `go install` also needs auth. Set:
+
+```bash
+export GOPRIVATE=github.com/Papermap-ai/*
+# Plus a git credential helper or SSH key with read access to the repo.
 ```
 
 ### From source
