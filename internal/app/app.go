@@ -209,6 +209,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat = updatedChat
 		return m, cmd
 
+	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		// Forward mouse events to the chat viewport so wheel scrolling
+		// works. Other screens have no scrollable surface today.
+		if m.screen == screenChat {
+			updatedChat, cmd := m.chat.Update(msg)
+			m.chat = updatedChat
+			return m, cmd
+		}
+		return m, nil
+
 	case workspacesLoadedMsg:
 		if msg.err != nil || len(msg.entries) == 0 {
 			// Non-fatal. Keep whatever we already have cached. If the picker

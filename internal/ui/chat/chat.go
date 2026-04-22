@@ -360,6 +360,29 @@ func (m Model) ChatID() string {
 	return m.chatID
 }
 
+// ViewportYOffset returns the transcript viewport's current vertical scroll
+// position. Useful for tests and callers that need to inspect scroll state.
+func (m Model) ViewportYOffset() int {
+	return m.viewport.YOffset()
+}
+
+// ViewportTotalLines returns the total number of rendered transcript lines.
+func (m Model) ViewportTotalLines() int {
+	return m.viewport.TotalLineCount()
+}
+
+// AppendTestMessages appends fully-formed transcript messages and refreshes
+// the viewport. Intended for tests that need a populated, scrollable
+// transcript without driving the streaming pipeline.
+func (m *Model) AppendTestMessages(messages ...Message) {
+	if len(messages) == 0 {
+		return
+	}
+	m.messages = append(m.messages, messages...)
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+}
+
 func (m Model) View(th theme.Theme, workspace string, width int) string {
 	if workspace == "" {
 		workspace = "Unified Workspace"
