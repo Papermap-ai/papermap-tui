@@ -147,11 +147,13 @@ if [ -z "$TOKEN" ]; then
 
     info "Downloading $ARCHIVE"
     dl_to_file "$BASE_URL/$ARCHIVE" "$TMP/$ARCHIVE" \
-        || err "failed to download $ARCHIVE"
+        || err "failed to download $ARCHIVE.
+  The release may be missing archives, or your platform ($OS/$ARCH)
+  may not have been built. Check https://github.com/$REPO/releases/tag/$TAG."
 
     info "Downloading checksums.txt"
     dl_to_file "$BASE_URL/checksums.txt" "$TMP/checksums.txt" \
-        || err "failed to download checksums"
+        || err "failed to download checksums (release may be missing artifacts)"
 else
     info "Resolving release assets..."
     release_json="$TMP/release.json"
@@ -171,9 +173,15 @@ else
     }
 
     archive_id="$(asset_id_for "$ARCHIVE")"
-    [ -n "$archive_id" ] || err "asset $ARCHIVE not found in release $TAG"
+    if [ -z "$archive_id" ]; then
+        err "asset $ARCHIVE not found in release $TAG.
+  This usually means the release exists but its archives were never
+  uploaded (e.g. the GoReleaser workflow did not run for this tag).
+  Check https://github.com/$REPO/releases/tag/$TAG to confirm assets
+  are present, or rerun the release workflow for this tag."
+    fi
     sums_id="$(asset_id_for "checksums.txt")"
-    [ -n "$sums_id" ] || err "checksums.txt not found in release $TAG"
+    [ -n "$sums_id" ] || err "checksums.txt not found in release $TAG (release may be missing artifacts)"
 
     info "Downloading $ARCHIVE"
     dl_to_file "$API_BASE/releases/assets/$archive_id" "$TMP/$ARCHIVE" "application/octet-stream" \

@@ -1,9 +1,31 @@
 name: release
 
 on:
+  # Manual rerun for a specific tag (use this to backfill releases whose
+  # archives were never uploaded, e.g. when release-please cut the tag
+  # before this pipeline was wired up).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Defaults to current ref."
+        required: false
+        type: string
+
+  # Direct tag pushes from a developer machine still trigger a release.
   push:
     tags:
       - "v*"
+
+  # Invoked by release-please.yml after it cuts a release. Using
+  # workflow_call (instead of relying on the tag-push event) sidesteps the
+  # GitHub rule that workflows triggered via GITHUB_TOKEN do not start
+  # other workflow runs.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to release."
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,8 +35,18 @@ jobs:
     name: GoReleaser
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve target ref
+        id: ref
+        run: |
+          tag="${{ inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.ref.outputs.tag }}
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
