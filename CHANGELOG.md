@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.1.0...v0.1.1) (2026-04-22)
+
+
+### Documentation
+
+* adds tasks in phase two of papermap tui ([d11ceec](https://github.com/Papermap-ai/papermap-tui/commit/d11ceecfacee6025233f2a7ef752347e7067f64f))
+
 ## [0.1.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.0.1...v0.1.0) (2026-04-22)
 
 
