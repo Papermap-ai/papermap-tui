@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/app"
 	"github.com/papermap/papermap-tui/internal/auth"
@@ -440,6 +442,56 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 	}
 	if streamCalls < 2 {
 		t.Fatalf("expected stream retry after request race, got %d calls", streamCalls)
+	}
+}
+
+func TestMouseWheelDownScrollsChatViewport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	model, err := app.NewModel()
+	if err != nil {
+		t.Fatalf("NewModel returned error: %v", err)
+	}
+
+	// Build a transcript tall enough to scroll. Each message renders on
+	// multiple lines, so a few dozen entries comfortably exceed an 80x24
+	// viewport.
+	messages := make([]chat.Message, 0, 60)
+	for i := 0; i < 30; i++ {
+		messages = append(messages,
+			chat.Message{Role: "you", Content: "question " + strconv.Itoa(i)},
+			chat.Message{
+				Role: "alan",
+				Content: "answer line one\nanswer line two\n" +
+					"answer line three for message " + strconv.Itoa(i),
+			},
+		)
+	}
+
+	seeded := model.SeedChatForTest(80, 24, messages...)
+
+	// Sanity: transcript must exceed visible height, otherwise scrolling
+	// is a no-op and the assertion would be meaningless.
+	if total := seeded.Chat().ViewportTotalLines(); total <= 24 {
+		t.Fatalf("expected transcript taller than viewport, got %d lines", total)
+	}
+
+	beforeOffset := seeded.Chat().ViewportYOffset()
+	if beforeOffset != 0 {
+		t.Fatalf("expected viewport at top before wheel test, got offset %d", beforeOffset)
+	}
+
+	wheel := tea.MouseWheelMsg{Button: tea.MouseWheelDown}
+	next, _ := seeded.Update(wheel)
+	nextModel, ok := next.(app.Model)
+	if !ok {
+		t.Fatalf("expected app.Model after Update, got %T", next)
+	}
+
+	afterOffset := nextModel.Chat().ViewportYOffset()
+	if afterOffset <= beforeOffset {
+		t.Fatalf("expected wheel-down to advance viewport offset, before=%d after=%d",
+			beforeOffset, afterOffset)
 	}
 }
 
