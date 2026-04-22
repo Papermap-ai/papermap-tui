@@ -1,4 +1,5 @@
 # TODO
+## Phase One
 - [x] Add a loader when you start a up so that you can figure out if the person is logged in or not
 - [x] Add a new papermap logo and edit first screen view with it
 - [x] Figure out how to prevent scrolling when you're in the papermap application
@@ -11,7 +12,9 @@
 - [x] Figure out a means of properly storing the credentials from the users
 - [x] Figure out how to not be able to revert the binary file
 - [x] Add a better means of authenticating the user in the auth backend
-- [ ] Figure out how to fix scrolling with the mouse
+- [x] Figure out how to fix scrolling with the mouse
+
+## Phase Two
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Figure out how to run shell commands in the chat
 - [ ] Figure out how to display the content as it streams, particularly the thinking process.
