@@ -15,7 +15,7 @@
 - [x] Figure out how to fix scrolling with the mouse
 
 ## Phase Two
+- [ ] Figure out how to display the content as it streams, particularly the thinking process.
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Figure out how to run shell commands in the chat
-- [ ] Figure out how to display the content as it streams, particularly the thinking process.
 - [ ] think about the ability to prepend some things like an md file to the prompts that you send to Alan
