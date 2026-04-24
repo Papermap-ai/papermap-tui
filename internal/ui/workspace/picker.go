@@ -97,9 +97,6 @@ func (m *Model) SetLoading(loading bool, message string) {
 	}
 }
 
-// Entries returns the current entries for callers that need them.
-func (m Model) Entries() []config.WorkspaceEntry { return m.entries }
-
 func (m Model) totalPages() int {
 	if len(m.entries) == 0 {
 		return 1
@@ -198,7 +195,7 @@ func (m Model) View(th theme.Theme, screenWidth int) string {
 	case len(m.entries) == 0:
 		body = th.Muted.Render("No workspaces available yet.")
 	default:
-		body = m.renderEntries(th, width-6) // account for padding
+		body = m.renderEntries(th)
 	}
 
 	footer := m.renderFooter(th)
@@ -220,7 +217,7 @@ func (m Model) View(th theme.Theme, screenWidth int) string {
 	return panel.Render(content)
 }
 
-func (m Model) renderEntries(th theme.Theme, innerWidth int) string {
+func (m Model) renderEntries(th theme.Theme) string {
 	start := m.page * pageSize
 	end := start + pageSize
 	if end > len(m.entries) {

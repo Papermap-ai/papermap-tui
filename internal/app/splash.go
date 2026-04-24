@@ -10,10 +10,10 @@ import (
 // newSplashSpinner creates a spinner.Model configured for the splash screen.
 // It uses spinner.Dot with the theme accent color so the loading indicator
 // matches the Papermap brand.
-func newSplashSpinner(_ theme.Theme) spinner.Model {
+func newSplashSpinner(th theme.Theme) spinner.Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
+	s.Style = lipgloss.NewStyle().Foreground(th.LogoColorA)
 	return s
 }
 

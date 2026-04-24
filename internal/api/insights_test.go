@@ -59,15 +59,25 @@ func TestStartInsightAndStream(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			// Real backend emits progress events (phase_update, agent_thought,
-			// tool_*) plus a final `complete` sentinel. The client should
-			// extract phase/message for phase_update and detect done on
+			// tool_*) plus a final `complete` sentinel. The client extracts
+			// phase/message for phase_update, populates trace fields for
+			// reasoning and tool lifecycle events, and detects done on
 			// complete. No SSE event carries the final answer text.
 			_, _ = io.WriteString(w, strings.Join([]string{
 				"event: phase_update",
 				`data: {"type":"phase_update","phase":"analyzing","message":"Analyzing data...","request_id":"req-123","chat_id":"chat-123"}`,
 				"",
 				"event: agent_thought",
-				`data: {"type":"agent_thought","content":"thinking...","is_complete":false,"request_id":"req-123","chat_id":"chat-123"}`,
+				`data: {"type":"agent_thought","content":"thinking...","is_complete":false,"iteration":1,"request_id":"req-123","chat_id":"chat-123"}`,
+				"",
+				"event: tool_call_announced",
+				`data: {"type":"tool_call_announced","tool_name":"sql_query","tool_display_name":"SQL Query","iteration":1,"tool_call_id":"call-1","request_id":"req-123","chat_id":"chat-123"}`,
+				"",
+				"event: tool_call_args_complete",
+				`data: {"type":"tool_call_args_complete","tool_name":"sql_query","tool_display_name":"SQL Query","tool_call_id":"call-1","full_args":{"query":"SELECT 1"},"private_args":false,"request_id":"req-123","chat_id":"chat-123"}`,
+				"",
+				"event: tool_call_complete",
+				`data: {"type":"tool_call_complete","tool_name":"sql_query","tool_display_name":"SQL Query","tool_call_id":"call-1","status":"success","duration_ms":42.5,"result_preview":"14 rows","request_id":"req-123","chat_id":"chat-123"}`,
 				"",
 				"event: complete",
 				`data: {"type":"complete","status":"success","request_id":"req-123","chat_id":"chat-123"}`,
@@ -115,10 +125,40 @@ func TestStartInsightAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Next returned error: %v", err)
 	}
-	// agent_thought carries reasoning; the client deliberately does NOT
-	// surface its content as text.
+	// agent_thought now carries the reasoning content as a trace field
+	// so the chat layer can render Alan's thinking. The legacy Message
+	// field stays empty: only phase_update populates Message.
 	if second.Type != "agent_thought" || second.Message != "" {
 		t.Fatalf("unexpected second event: %+v", second)
+	}
+	if second.Content != "thinking..." || second.Iteration != 1 || second.IsComplete {
+		t.Fatalf("unexpected agent_thought trace fields: %+v", second)
+	}
+
+	announced, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool_call_announced Next returned error: %v", err)
+	}
+	if announced.Type != "tool_call_announced" || announced.ToolCallID != "call-1" ||
+		announced.ToolName != "sql_query" || announced.ToolDisplayName != "SQL Query" {
+		t.Fatalf("unexpected tool_call_announced event: %+v", announced)
+	}
+
+	argsComplete, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool_call_args_complete Next returned error: %v", err)
+	}
+	if argsComplete.Type != "tool_call_args_complete" || argsComplete.ToolCallID != "call-1" {
+		t.Fatalf("unexpected tool_call_args_complete event: %+v", argsComplete)
+	}
+
+	toolDone, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool_call_complete Next returned error: %v", err)
+	}
+	if toolDone.Type != "tool_call_complete" || toolDone.Status != "success" ||
+		toolDone.DurationMS != 42.5 || toolDone.ResultPreview != "14 rows" {
+		t.Fatalf("unexpected tool_call_complete event: %+v", toolDone)
 	}
 
 	third, err := stream.Next()
