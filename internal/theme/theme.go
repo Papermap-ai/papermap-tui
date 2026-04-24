@@ -4,6 +4,8 @@ import (
 	"image/color"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 )
 
 type Theme struct {
@@ -77,5 +79,27 @@ func Default() Theme {
 		TextColor:        text,
 		ButtonBgInactive: lipgloss.Color("#2A2A35"),
 		SplashLogo:       lipgloss.Color("#FFFFFF"),
+	}
+}
+
+// ChartPalette projects the theme onto the charts.Palette contract so chart
+// renderers stay decoupled from the broader theme surface. The series
+// rotation is tuned for terminal contrast against the panel background
+// while still echoing the brand accent as the lead color.
+func (t Theme) ChartPalette() charts.Palette {
+	return charts.Palette{
+		Series: []color.Color{
+			t.LogoColorA,          // brand green leads.
+			t.LogoColorB,          // soft mint complements.
+			lipgloss.Color("39"),  // blue.
+			lipgloss.Color("214"), // orange.
+			lipgloss.Color("213"), // pink.
+			lipgloss.Color("226"), // yellow.
+			lipgloss.Color("105"), // purple.
+		},
+		Axis:  t.MutedColor,
+		Grid:  lipgloss.Color("238"),
+		Label: t.TextColor,
+		Muted: t.Muted,
 	}
 }

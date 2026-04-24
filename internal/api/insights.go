@@ -41,6 +41,92 @@ type InsightResponse struct {
 	RawDataJSON json.RawMessage
 }
 
+// ChartConfig is the parsed, typed view of `visualization_config`. The
+// backend emits a uniform shape across all chart types (verified against
+// papermap-da-api `app/agents/analyst/analyzer_prompts.py`):
+//
+//	{title, subtitle, x_key, y_key, label_key, colors, width, height}
+//
+// Renderers consume ChartConfig instead of the raw map so that field
+// access is statically typed and parsing concerns live in one place.
+type ChartConfig struct {
+	Title    string
+	Subtitle string
+	XKey     string
+	YKey     string
+	LabelKey string
+	// Colors is the LLM-suggested palette as raw hex strings. May be
+	// nil. Renderers are free to ignore it in favor of the theme palette.
+	Colors []string
+}
+
+// ChartConfigFromMap parses a backend `visualization_config` map into a
+// ChartConfig. Unknown keys are ignored. Missing keys produce zero values.
+// A nil map is valid input and produces a zero-value ChartConfig.
+func ChartConfigFromMap(raw map[string]any) ChartConfig {
+	cfg := ChartConfig{}
+	if raw == nil {
+		return cfg
+	}
+	cfg.Title = stringFromMap(raw, "title")
+	cfg.Subtitle = stringFromMap(raw, "subtitle")
+	cfg.XKey = stringFromMap(raw, "x_key")
+	cfg.YKey = stringFromMap(raw, "y_key")
+	cfg.LabelKey = stringFromMap(raw, "label_key")
+	cfg.Colors = stringSliceFromMap(raw, "colors")
+	return cfg
+}
+
+// Chart returns the parsed visualization_config for this response.
+// Callers receive the same value on each call; parsing is cheap so no
+// caching is performed. The method is named Chart rather than ChartConfig
+// to avoid type/method name collision with the ChartConfig type itself.
+func (r *InsightResponse) Chart() ChartConfig {
+	return ChartConfigFromMap(r.VisualizationConfig)
+}
+
+// GetTitle satisfies the chart title interface used by renderers without
+// importing the charts package back into api.
+func (c ChartConfig) GetTitle() string { return c.Title }
+
+// GetSubtitle satisfies the chart title interface used by renderers.
+func (c ChartConfig) GetSubtitle() string { return c.Subtitle }
+
+func stringFromMap(raw map[string]any, key string) string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func stringSliceFromMap(raw map[string]any, key string) []string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (r *InsightResponse) UnmarshalJSON(data []byte) error {
 	type alias InsightResponse
 	var decoded alias

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 )
@@ -31,11 +32,22 @@ type Tile struct {
 	FormatConfig map[string]any
 }
 
+// Chart carries the source table and parsed config needed to render a
+// bar or pie chart at view time. Stored on the message rather than
+// pre-rendered so the renderer can react to viewport width changes
+// without re-fetching the response.
+type Chart struct {
+	Type   string
+	Table  *api.InsightTable
+	Config api.ChartConfig
+}
+
 type Message struct {
 	Role      string
 	Content   string
 	Table     *Table
 	Tile      *Tile
+	Chart     *Chart
 	ChartType string
 	// EmptyData is set when the response had a chart but the data array
 	// was empty. The renderer surfaces a "(no rows)" placeholder in that
@@ -700,7 +712,7 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 			label = strings.TrimSpace(status)
 		}
 		body = th.Muted.Render(spinnerFrame + " " + label)
-	} else if body == "" && message.Tile == nil && message.Table == nil && !message.EmptyData {
+	} else if body == "" && message.Tile == nil && message.Table == nil && message.Chart == nil && !message.EmptyData {
 		body = th.Muted.Render("No content.")
 	} else if body != "" {
 		body = renderRichText(th, width, body)
@@ -734,6 +746,10 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 		parts = append(parts, th.Muted.Render("(no rows)"))
 	case message.Table != nil:
 		parts = append(parts, renderTable(th, message.Table))
+	case message.Chart != nil:
+		if rendered := renderChart(th, width, message.Chart); rendered != "" {
+			parts = append(parts, rendered)
+		}
 	case message.ChartType != "" && message.Tile == nil:
 		if badge := components.ChartBadge(th, message.ChartType); badge != "" {
 			parts = append(parts, badge)

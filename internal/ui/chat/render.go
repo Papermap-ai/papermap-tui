@@ -2,6 +2,7 @@ package chat
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -10,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2/table"
 
 	"github.com/papermap/papermap-tui/internal/theme"
+	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 )
 
 // glamourCache memoizes TermRenderer instances per word-wrap width so we
@@ -101,12 +103,55 @@ func renderRichText(th theme.Theme, width int, content string) string {
 // overflow the viewport.
 const maxCellContentWidth = 20
 
+// maxTableRows caps the number of data rows rendered for any single
+// table in the chat transcript. Anything beyond this is summarized in a
+// muted footer so a 500-row backend payload cannot push the rest of the
+// conversation off the screen.
+const maxTableRows = 15
+
+// renderChart resolves a Chart message into a styled, terminal-native
+// chart string. Width is the message body width; the caller wraps every
+// rendered line with a 2-column accent bar prefix ("▎ "), so the chart
+// must reserve those columns or the longest bars will wrap and shred the
+// layout. Returns "" when the chart cannot be rendered, in which case
+// the caller falls back to the chart-type badge.
+func renderChart(th theme.Theme, width int, c *Chart) string {
+	if c == nil || c.Table == nil {
+		return ""
+	}
+	chartWidth := width - 2
+	if chartWidth < 20 {
+		chartWidth = 20
+	}
+	// Charts read better when given height proportional to width; the
+	// chat doesn't have a fixed per-message height, so a 2:1 width:height
+	// ratio with floor 8 produces readable output without wasting space.
+	height := chartWidth / 2
+	if height < 8 {
+		height = 8
+	}
+	if height > 18 {
+		height = 18
+	}
+	size := charts.Size{Width: chartWidth, Height: height}
+	return charts.Render(c.Type, th.ChartPalette(), c.Table, c.Config, size)
+}
+
 func renderTable(th theme.Theme, t *Table) string {
 	if t == nil || len(t.Columns) == 0 || len(t.Rows) == 0 {
 		return ""
 	}
 
 	columns := normalizeColumns(t.Columns, t.Rows)
+
+	// Cap visible rows so a long backend payload cannot overflow the
+	// viewport; surface the remainder in a muted footer below the table.
+	visibleRows := t.Rows
+	hidden := 0
+	if len(visibleRows) > maxTableRows {
+		hidden = len(visibleRows) - maxTableRows
+		visibleRows = visibleRows[:maxTableRows]
+	}
 
 	// Truncate every cell upfront so column widths stay bounded; lipgloss
 	// table handles padding, alignment, and borders for us.
@@ -115,8 +160,8 @@ func renderTable(th theme.Theme, t *Table) string {
 		headers[i] = truncateCell(col, maxCellContentWidth)
 	}
 
-	rows := make([][]string, len(t.Rows))
-	for i, row := range t.Rows {
+	rows := make([][]string, len(visibleRows))
+	for i, row := range visibleRows {
 		cells := make([]string, len(columns))
 		for j := range columns {
 			value := ""
@@ -146,7 +191,16 @@ func renderTable(th theme.Theme, t *Table) string {
 			return cellStyle
 		})
 
-	return tbl.Render()
+	rendered := tbl.Render()
+	if hidden > 0 {
+		suffix := "rows"
+		if hidden == 1 {
+			suffix = "row"
+		}
+		footer := th.Muted.Render("(" + strconv.Itoa(hidden) + " more " + suffix + " hidden)")
+		rendered = lipgloss.JoinVertical(lipgloss.Left, rendered, footer)
+	}
+	return rendered
 }
 
 func normalizeColumns(columns []string, rows [][]string) []string {
