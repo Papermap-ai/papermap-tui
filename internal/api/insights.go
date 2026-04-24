@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,35 +15,23 @@ import (
 )
 
 type InsightRequest struct {
-	Prompt                  string         `json:"prompt"`
-	WorkspaceID             string         `json:"workspace_id"`
-	ChatID                  string         `json:"chat_id"`
-	ReportID                string         `json:"report_id,omitempty"`
-	RequestID               string         `json:"request_id,omitempty"`
-	LLMModel                string         `json:"llm_model,omitempty"`
-	UseSearch               *bool          `json:"use_search,omitempty"`
-	AllowWorkspaceSwitching bool           `json:"allow_workspace_switching"`
-	StreamExecution         bool           `json:"stream_execution"`
-	DisplayPrompt           string         `json:"display_prompt,omitempty"`
-	RundownMeta             map[string]any `json:"rundown_meta,omitempty"`
-	InteractionSource       string         `json:"interaction_source,omitempty"`
+	Prompt                  string `json:"prompt"`
+	WorkspaceID             string `json:"workspace_id"`
+	ChatID                  string `json:"chat_id"`
+	RequestID               string `json:"request_id,omitempty"`
+	UseSearch               *bool  `json:"use_search,omitempty"`
+	AllowWorkspaceSwitching bool   `json:"allow_workspace_switching"`
+	StreamExecution         bool   `json:"stream_execution"`
+	DisplayPrompt           string `json:"display_prompt,omitempty"`
+	InteractionSource       string `json:"interaction_source,omitempty"`
 }
 
 type InsightResponse struct {
 	LLMDataID           string         `json:"llm_data_id"`
-	ResponseType        string         `json:"response_type"`
 	TextResponse        string         `json:"text_response"`
-	Status              string         `json:"status,omitempty"`
-	Data                any            `json:"data"`
-	Code                string         `json:"code,omitempty"`
-	Error               bool           `json:"error"`
 	Thoughts            string         `json:"thoughts,omitempty"`
-	ThoughtLog          []any          `json:"thought_log,omitempty"`
 	ChartType           string         `json:"chart_type,omitempty"`
-	SchemaHints         map[string]any `json:"schema_hints,omitempty"`
-	CompleteQueryPlan   string         `json:"complete_query_task_plan,omitempty"`
 	VisualizationConfig map[string]any `json:"visualization_config,omitempty"`
-	ProgressEvents      []any          `json:"progress_events,omitempty"`
 	Raw                 map[string]any
 	// RawDataJSON holds the raw JSON bytes of the `data` field (or the
 	// nested `data.data` field when the backend wraps responses in an
@@ -49,6 +39,92 @@ type InsightResponse struct {
 	// recover JSON object key insertion order, which is lost when
 	// decoding into map[string]any.
 	RawDataJSON json.RawMessage
+}
+
+// ChartConfig is the parsed, typed view of `visualization_config`. The
+// backend emits a uniform shape across all chart types (verified against
+// papermap-da-api `app/agents/analyst/analyzer_prompts.py`):
+//
+//	{title, subtitle, x_key, y_key, label_key, colors, width, height}
+//
+// Renderers consume ChartConfig instead of the raw map so that field
+// access is statically typed and parsing concerns live in one place.
+type ChartConfig struct {
+	Title    string
+	Subtitle string
+	XKey     string
+	YKey     string
+	LabelKey string
+	// Colors is the LLM-suggested palette as raw hex strings. May be
+	// nil. Renderers are free to ignore it in favor of the theme palette.
+	Colors []string
+}
+
+// ChartConfigFromMap parses a backend `visualization_config` map into a
+// ChartConfig. Unknown keys are ignored. Missing keys produce zero values.
+// A nil map is valid input and produces a zero-value ChartConfig.
+func ChartConfigFromMap(raw map[string]any) ChartConfig {
+	cfg := ChartConfig{}
+	if raw == nil {
+		return cfg
+	}
+	cfg.Title = stringFromMap(raw, "title")
+	cfg.Subtitle = stringFromMap(raw, "subtitle")
+	cfg.XKey = stringFromMap(raw, "x_key")
+	cfg.YKey = stringFromMap(raw, "y_key")
+	cfg.LabelKey = stringFromMap(raw, "label_key")
+	cfg.Colors = stringSliceFromMap(raw, "colors")
+	return cfg
+}
+
+// Chart returns the parsed visualization_config for this response.
+// Callers receive the same value on each call; parsing is cheap so no
+// caching is performed. The method is named Chart rather than ChartConfig
+// to avoid type/method name collision with the ChartConfig type itself.
+func (r *InsightResponse) Chart() ChartConfig {
+	return ChartConfigFromMap(r.VisualizationConfig)
+}
+
+// GetTitle satisfies the chart title interface used by renderers without
+// importing the charts package back into api.
+func (c ChartConfig) GetTitle() string { return c.Title }
+
+// GetSubtitle satisfies the chart title interface used by renderers.
+func (c ChartConfig) GetSubtitle() string { return c.Subtitle }
+
+func stringFromMap(raw map[string]any, key string) string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func stringSliceFromMap(raw map[string]any, key string) []string {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (r *InsightResponse) UnmarshalJSON(data []byte) error {
@@ -66,10 +142,7 @@ func (r *InsightResponse) UnmarshalJSON(data []byte) error {
 	*r = InsightResponse(decoded)
 	r.Raw = raw
 	r.LLMDataID = firstString(decoded.LLMDataID, lookupString(raw, "llm_data_id"), lookupNestedString(raw, "data", "llm_data_id"))
-	r.ResponseType = firstString(decoded.ResponseType, lookupString(raw, "response_type"), lookupNestedString(raw, "data", "response_type"))
 	r.TextResponse = firstRawString(decoded.TextResponse, lookupRawString(raw, "text_response"), lookupNestedRawString(raw, "data", "text_response"))
-	r.Status = firstString(decoded.Status, lookupString(raw, "status"), lookupNestedString(raw, "data", "status"))
-	r.Code = firstRawString(decoded.Code, lookupRawString(raw, "code"), lookupNestedRawString(raw, "data", "code"))
 	r.Thoughts = firstRawString(decoded.Thoughts, lookupRawString(raw, "thoughts"), lookupNestedRawString(raw, "data", "thoughts"))
 	r.ChartType = firstString(decoded.ChartType, lookupString(raw, "chart_type"), lookupNestedString(raw, "data", "chart_type"))
 	r.RawDataJSON = extractRawDataField(data)
@@ -143,6 +216,40 @@ type InsightStreamEvent struct {
 	RequestID string
 	ChatID    string
 	Raw       map[string]any
+
+	// Trace fields. Populated for reasoning and tool lifecycle events
+	// (agent_thought, reasoning, tool_call_announced, tool_call_args_*,
+	// tool_output, tool_call_complete). The chat layer assembles these
+	// into a per-message trace surfaced in the UI; the API layer only
+	// extracts the relevant fields.
+
+	// Content holds streamed reasoning/output text. Populated for
+	// agent_thought, reasoning, and tool_output.
+	Content string
+	// IsComplete signals the final delta of a streamed text block
+	// (agent_thought / reasoning / tool_output).
+	IsComplete bool
+	// Iteration is the agent loop iteration index when present.
+	Iteration int
+
+	// ToolCallID correlates a tool's announce/args/output/complete
+	// events. May be empty for older backends; the chat layer falls
+	// back to most-recent open call when correlating.
+	ToolCallID string
+	// ToolName is the semantic identifier (stream_toolname).
+	ToolName string
+	// ToolDisplayName is the human-friendly tool label.
+	ToolDisplayName string
+	// PrivateOutput indicates the backend asks the client not to render
+	// the tool's output verbatim. The TUI uses it to skip output events.
+	PrivateOutput bool
+	// Status is the tool_call_complete status ("success", "error", ...).
+	Status string
+	// DurationMS is the tool execution duration when present.
+	DurationMS float64
+	// ResultPreview is an optional short result summary for
+	// tool_call_complete.
+	ResultPreview string
 }
 
 type InsightStream struct {
@@ -154,8 +261,17 @@ type InsightStream struct {
 	queued  []InsightStreamEvent
 }
 
+// GenerateRequestID returns a request id with a millisecond timestamp prefix
+// (kept for sortability) and 8 bytes of cryptographically random suffix so
+// concurrent callers cannot collide.
 func GenerateRequestID() string {
-	return fmt.Sprintf("chat_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano()%1_000_000)
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is exceptional; fall back to nanos so we
+		// still return *something* unique-ish per process tick.
+		return fmt.Sprintf("chat_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
 }
 
 func (c *Client) StartInsight(ctx context.Context, reqBody InsightRequest) (InsightResponse, error) {
@@ -243,12 +359,9 @@ func (s *InsightStream) Next() (InsightStreamEvent, error) {
 	for s.scanner.Scan() {
 		line := s.scanner.Text()
 		if line == "" {
-			event, ok, err := decodeSSEEvent(s.event, s.data)
+			event, ok := decodeSSEEvent(s.event, s.data)
 			s.event = ""
 			s.data = s.data[:0]
-			if err != nil {
-				return InsightStreamEvent{}, err
-			}
 			if ok {
 				return event, nil
 			}
@@ -278,12 +391,9 @@ func (s *InsightStream) Next() (InsightStreamEvent, error) {
 	}
 
 	if len(s.data) > 0 || s.event != "" {
-		event, ok, err := decodeSSEEvent(s.event, s.data)
+		event, ok := decodeSSEEvent(s.event, s.data)
 		s.event = ""
 		s.data = s.data[:0]
-		if err != nil {
-			return InsightStreamEvent{}, err
-		}
 		if ok {
 			return event, nil
 		}
@@ -311,20 +421,20 @@ func (s *InsightStream) Close() error {
 	return s.body.Close()
 }
 
-func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, bool, error) {
+func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, bool) {
 	payload := strings.TrimSpace(strings.Join(dataLines, "\n"))
 	if payload == "" {
-		return InsightStreamEvent{}, false, nil
+		return InsightStreamEvent{}, false
 	}
 
 	if payload == "[DONE]" {
-		return InsightStreamEvent{Type: "done", Done: true}, true, nil
+		return InsightStreamEvent{Type: "done", Done: true}, true
 	}
 
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 		typeName := firstString(strings.TrimSpace(eventName), "message")
-		return InsightStreamEvent{Type: typeName, Message: payload}, true, nil
+		return InsightStreamEvent{Type: typeName, Message: payload}, true
 	}
 
 	typeName := strings.ToLower(firstString(
@@ -345,10 +455,11 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 		errorText = firstString(lookupString(raw, "message"), lookupNestedString(raw, "data", "message"))
 	}
 
-	// Extract phase/message for progress-only events (phase_update). Note: we
-	// deliberately do NOT pull `content` from agent_thought, tool_output, or
-	// other reasoning events - those are the model's thinking, not the final
-	// answer. The final answer is returned from the /charts/stream HTTP body.
+	// Extract phase/message for progress-only events (phase_update). For
+	// reasoning and tool lifecycle events we now populate the trace
+	// fields below so the chat layer can render Alan's thinking and
+	// SQL/tool activity. The final answer still arrives only on the
+	// /charts/stream HTTP body, never on the SSE channel.
 	phase := firstString(
 		lookupString(raw, "phase"),
 		lookupNestedString(raw, "data", "phase"),
@@ -372,11 +483,55 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 		Raw:       raw,
 	}
 
+	populateTraceFields(&event, raw)
+
 	if event.Error != "" {
 		event.Type = "error"
 	}
 
-	return event, true, nil
+	return event, true
+}
+
+// populateTraceFields fills in the trace-related fields on event by
+// looking up keys on the top-level payload first and falling back to a
+// nested `data` envelope. This mirrors how the rest of the decoder
+// tolerates either shape from the backend.
+func populateTraceFields(event *InsightStreamEvent, raw map[string]any) {
+	event.Content = firstRawString(
+		lookupRawString(raw, "content"),
+		lookupNestedRawString(raw, "data", "content"),
+	)
+	event.IsComplete = lookupBool(raw, "is_complete") || lookupNestedBool(raw, "data", "is_complete")
+	event.Iteration = lookupInt(raw, "iteration")
+	if event.Iteration == 0 {
+		event.Iteration = lookupNestedInt(raw, "data", "iteration")
+	}
+
+	event.ToolCallID = firstString(
+		lookupString(raw, "tool_call_id"),
+		lookupNestedString(raw, "data", "tool_call_id"),
+	)
+	event.ToolName = firstString(
+		lookupString(raw, "tool_name"),
+		lookupNestedString(raw, "data", "tool_name"),
+	)
+	event.ToolDisplayName = firstString(
+		lookupString(raw, "tool_display_name"),
+		lookupNestedString(raw, "data", "tool_display_name"),
+	)
+	event.PrivateOutput = lookupBool(raw, "private_output") || lookupNestedBool(raw, "data", "private_output")
+	event.Status = firstString(
+		lookupString(raw, "status"),
+		lookupNestedString(raw, "data", "status"),
+	)
+	event.DurationMS = lookupFloat(raw, "duration_ms")
+	if event.DurationMS == 0 {
+		event.DurationMS = lookupNestedFloat(raw, "data", "duration_ms")
+	}
+	event.ResultPreview = firstString(
+		lookupString(raw, "result_preview"),
+		lookupNestedString(raw, "data", "result_preview"),
+	)
 }
 
 // ExtractTable returns a table parsed from an arbitrary response map if one
@@ -387,18 +542,16 @@ func ExtractTable(raw map[string]any) *InsightTable {
 }
 
 func extractTable(raw map[string]any) *InsightTable {
-	for _, candidate := range []map[string]any{raw} {
-		if table := buildTable(candidate); table != nil {
-			return table
+	if table := buildTable(raw); table != nil {
+		return table
+	}
+	for _, key := range []string{"data", "payload", "result", "table"} {
+		nested, ok := raw[key].(map[string]any)
+		if !ok {
+			continue
 		}
-		for _, key := range []string{"data", "payload", "result", "table"} {
-			nested, ok := candidate[key].(map[string]any)
-			if !ok {
-				continue
-			}
-			if table := buildTable(nested); table != nil {
-				return table
-			}
+		if table := buildTable(nested); table != nil {
+			return table
 		}
 	}
 
@@ -513,6 +666,78 @@ func lookupBool(raw map[string]any, key string) bool {
 	}
 	boolValue, ok := value.(bool)
 	return ok && boolValue
+}
+
+func lookupNestedBool(raw map[string]any, parent string, key string) bool {
+	nested, ok := raw[parent].(map[string]any)
+	if !ok {
+		return false
+	}
+	return lookupBool(nested, key)
+}
+
+func lookupInt(raw map[string]any, key string) int {
+	value, ok := raw[key]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		n, err := typed.Int64()
+		if err != nil {
+			return 0
+		}
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func lookupNestedInt(raw map[string]any, parent string, key string) int {
+	nested, ok := raw[parent].(map[string]any)
+	if !ok {
+		return 0
+	}
+	return lookupInt(nested, key)
+}
+
+func lookupFloat(raw map[string]any, key string) float64 {
+	value, ok := raw[key]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		f, err := typed.Float64()
+		if err != nil {
+			return 0
+		}
+		return f
+	default:
+		return 0
+	}
+}
+
+func lookupNestedFloat(raw map[string]any, parent string, key string) float64 {
+	nested, ok := raw[parent].(map[string]any)
+	if !ok {
+		return 0
+	}
+	return lookupFloat(nested, key)
 }
 
 func firstString(values ...string) string {

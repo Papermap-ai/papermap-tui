@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 )
@@ -31,17 +32,39 @@ type Tile struct {
 	FormatConfig map[string]any
 }
 
+// Chart carries the source table and parsed config needed to render a
+// bar or pie chart at view time. Stored on the message rather than
+// pre-rendered so the renderer can react to viewport width changes
+// without re-fetching the response.
+type Chart struct {
+	Type   string
+	Table  *api.InsightTable
+	Config api.ChartConfig
+}
+
 type Message struct {
 	Role      string
 	Content   string
 	Table     *Table
 	Tile      *Tile
+	Chart     *Chart
 	ChartType string
 	// EmptyData is set when the response had a chart but the data array
 	// was empty. The renderer surfaces a "(no rows)" placeholder in that
 	// case so users see the response landed but had nothing to display.
 	EmptyData bool
 	Pending   bool
+	// Trace holds Alan's reasoning timeline (thoughts and tool calls)
+	// streamed alongside the final answer. Rendered above the body so
+	// the trace reads as supporting context.
+	Trace []TraceStep
+	// TraceCollapsed controls whether a completed trace is shown as a
+	// single summary line or fully expanded. While streaming the value
+	// is ignored and the renderer shows a rolling ticker.
+	TraceCollapsed bool
+	// TraceComplete latches on once the request finishes so the renderer
+	// switches from the live ticker to the collapsible summary.
+	TraceComplete bool
 }
 
 type Model struct {
@@ -59,6 +82,11 @@ type Model struct {
 	activeResponse int
 	theme          theme.Theme
 	lastTAHeight   int
+	// userScrolled latches when the user moves the viewport away from
+	// the bottom (mouse wheel, page-up, etc). Streaming updates respect
+	// this flag and stop forcing the viewport to the bottom so trace
+	// inspection isn't yanked away as new chunks arrive.
+	userScrolled bool
 }
 
 func NewModel(th theme.Theme) Model {
@@ -75,21 +103,21 @@ func NewModel(th theme.Theme) Model {
 	ta.DynamicHeight = true
 
 	s := ta.Styles()
-	inputBg := lipgloss.Color("#11111B")
+	inputBg := th.InputBg
 	s.Focused.CursorLine = lipgloss.NewStyle().Background(inputBg)
 	s.Focused.Base = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#F2F5F4"))
+		Foreground(th.TextColor)
 	s.Focused.Text = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#F2F5F4"))
+		Foreground(th.TextColor)
 	s.Focused.EndOfBuffer = lipgloss.NewStyle().Background(inputBg)
 	s.Focused.Prompt = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#2ED8A3"))
+		Foreground(th.LogoColorA)
 	s.Focused.Placeholder = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#97A6A8"))
+		Foreground(th.MutedColor)
 
 	s.Blurred = s.Focused
 	ta.SetStyles(s)
@@ -103,7 +131,7 @@ func NewModel(th theme.Theme) Model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
+	sp.Style = lipgloss.NewStyle().Foreground(th.LogoColorA)
 
 	return Model{
 		textarea:       ta,
@@ -144,6 +172,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if len(m.messages) > 0 {
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
+			m.noteUserScroll()
 			return m, vpCmd
 		}
 		return m, nil
@@ -152,6 +181,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if len(m.messages) > 0 {
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
+			m.noteUserScroll()
 			if vpCmd != nil {
 				return m, vpCmd
 			}
@@ -165,33 +195,42 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		switch key {
 		case "shift+up":
 			m.viewport.ScrollUp(1)
+			m.noteUserScroll()
 			return m, nil
 		case "shift+down":
 			m.viewport.ScrollDown(1)
+			m.noteUserScroll()
 			return m, nil
 		case "pgup", "shift+pgup":
 			m.viewport.PageUp()
+			m.noteUserScroll()
 			return m, nil
 		case "pgdown", "shift+pgdown":
 			m.viewport.PageDown()
+			m.noteUserScroll()
 			return m, nil
 		case "home", "shift+home":
 			m.viewport.GotoTop()
+			m.noteUserScroll()
 			return m, nil
 		case "end", "shift+end":
 			m.viewport.GotoBottom()
+			m.userScrolled = false
 			return m, nil
 		case "ctrl+u":
 			m.viewport.HalfPageUp()
+			m.noteUserScroll()
 			return m, nil
 		case "ctrl+d":
 			m.viewport.HalfPageDown()
+			m.noteUserScroll()
 			return m, nil
 		}
 
-		if key == "ctrl+l" {
-			m.Clear()
-			return m, nil
+		if key == "ctrl+t" {
+			if m.ToggleAllTraces() {
+				return m, nil
+			}
 		}
 
 		// Only block submit while streaming; other input still flows.
@@ -253,7 +292,7 @@ func (m *Model) SetStreamStatus(status string) {
 }
 
 func (m *Model) AppendStreamText(text string) {
-	if strings.TrimSpace(text) == "" && text == "" {
+	if text == "" {
 		return
 	}
 	m.ensureAssistantSlot()
@@ -280,6 +319,96 @@ func (m *Model) SetStreamTable(table *Table) {
 	m.scrollToBottom()
 }
 
+// MergeStreamThoughtDelta appends a streamed reasoning chunk to the active
+// assistant slot's trace. complete signals the final delta of the thought
+// block so the next chunk in the same iteration starts a fresh entry.
+func (m *Model) MergeStreamThoughtDelta(iteration int, delta string, complete bool) {
+	if delta == "" && !complete {
+		return
+	}
+	m.ensureAssistantSlot()
+	m.messages[m.activeResponse].Trace = MergeThoughtDelta(
+		m.messages[m.activeResponse].Trace,
+		iteration,
+		delta,
+		complete,
+	)
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// AppendStreamTrace appends a single trace step to the active assistant
+// slot. Used for tool_call_announced and tool_call_args_complete events.
+func (m *Model) AppendStreamTrace(step TraceStep) {
+	m.ensureAssistantSlot()
+	m.messages[m.activeResponse].Trace = append(m.messages[m.activeResponse].Trace, step)
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// PairToolOutput attaches output / status / duration to the matching tool
+// call step (by tool_call_id) in the active assistant slot.
+func (m *Model) PairToolOutput(toolCallID string, output string, status string, durationMS float64) {
+	m.ensureAssistantSlot()
+	m.messages[m.activeResponse].Trace = AttachToolOutput(
+		m.messages[m.activeResponse].Trace,
+		toolCallID,
+		output,
+		status,
+		durationMS,
+	)
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// AppendStreamToolOutputContent appends streamed tool_output content to
+// the matching tool call step (by tool_call_id).
+func (m *Model) AppendStreamToolOutputContent(toolCallID string, content string) {
+	if content == "" {
+		return
+	}
+	m.ensureAssistantSlot()
+	m.messages[m.activeResponse].Trace = AppendToolOutputContent(
+		m.messages[m.activeResponse].Trace,
+		toolCallID,
+		content,
+	)
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// ToggleAllTraces flips the collapsed/expanded state of every completed
+// assistant trace in the transcript. When any eligible trace is currently
+// expanded the press collapses everything; otherwise it expands all so a
+// single keybind reliably reveals or hides the reasoning. Returns true
+// when at least one trace was eligible.
+func (m *Model) ToggleAllTraces() bool {
+	anyExpanded := false
+	hasTrace := false
+	for _, msg := range m.messages {
+		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
+			continue
+		}
+		hasTrace = true
+		if !msg.TraceCollapsed {
+			anyExpanded = true
+		}
+	}
+	if !hasTrace {
+		return false
+	}
+	// If anything is open, close everything. Otherwise open everything.
+	collapse := anyExpanded
+	for i, msg := range m.messages {
+		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
+			continue
+		}
+		m.messages[i].TraceCollapsed = collapse
+	}
+	m.syncViewportContent()
+	return true
+}
+
 func (m *Model) CompleteStream() {
 	m.streaming = false
 	m.streamStatus = ""
@@ -292,6 +421,13 @@ func (m *Model) CompleteStream() {
 			m.messages[m.activeResponse].Content = "No content returned."
 		}
 		m.messages[m.activeResponse].Pending = false
+		if len(m.messages[m.activeResponse].Trace) > 0 {
+			m.messages[m.activeResponse].TraceComplete = true
+			// Keep the thinking trace visible after the answer arrives
+			// so the user can read along without an extra keypress.
+			// ctrl+t hides it.
+			m.messages[m.activeResponse].TraceCollapsed = false
+		}
 	}
 	m.activeResponse = -1
 	m.syncViewportContent()
@@ -307,6 +443,10 @@ func (m *Model) FailStream(err string) {
 			m.messages[m.activeResponse].Content = "Request failed."
 		}
 		m.messages[m.activeResponse].Pending = false
+		if len(m.messages[m.activeResponse].Trace) > 0 {
+			m.messages[m.activeResponse].TraceComplete = true
+			m.messages[m.activeResponse].TraceCollapsed = false
+		}
 	}
 	m.activeResponse = -1
 	m.updateViewportDimensions()
@@ -327,9 +467,30 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 		start = len(m.messages)
 	}
 
+	// Preserve the active assistant slot's accumulated trace so the
+	// thinking timeline survives the swap to the final answer body.
+	// The first replacement message inherits the prior trace and is
+	// marked complete so the toggle keybind treats it as eligible.
+	var carriedTrace []TraceStep
+	carryTrace := false
+	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
+		prior := m.messages[m.activeResponse]
+		if len(prior.Trace) > 0 {
+			carriedTrace = prior.Trace
+			carryTrace = true
+		}
+	}
+
 	replaced := append([]Message(nil), m.messages[:start]...)
-	for _, message := range messages {
+	for i, message := range messages {
 		message.Pending = false
+		if i == 0 && carryTrace && len(message.Trace) == 0 {
+			message.Trace = carriedTrace
+			message.TraceComplete = true
+			// Keep the trace visible by default so users can read
+			// the reasoning alongside the answer. ctrl+t hides it.
+			message.TraceCollapsed = false
+		}
 		replaced = append(replaced, message)
 	}
 
@@ -351,6 +512,7 @@ func (m *Model) Clear() {
 	m.chatID = ""
 	m.requestID = ""
 	m.activeResponse = -1
+	m.userScrolled = false
 	m.updateViewportDimensions()
 	m.syncViewportContent()
 	m.scrollToBottom()
@@ -460,7 +622,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 
 	// Key hints.
 	hints := th.KeyHint.Render(
-		"enter: submit  ·  shift+↑↓: scroll  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
+		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
 	)
 
 	// Input area.
@@ -490,6 +652,7 @@ func (m *Model) beginRequest(prompt string) {
 	m.err = ""
 	m.textarea.Reset()
 	m.streaming = true
+	m.userScrolled = false
 	m.messages = append(m.messages,
 		Message{Role: "you", Content: prompt},
 		Message{Role: "alan", Pending: true},
@@ -549,7 +712,7 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 			label = strings.TrimSpace(status)
 		}
 		body = th.Muted.Render(spinnerFrame + " " + label)
-	} else if body == "" && message.Tile == nil && message.Table == nil && !message.EmptyData {
+	} else if body == "" && message.Tile == nil && message.Table == nil && message.Chart == nil && !message.EmptyData {
 		body = th.Muted.Render("No content.")
 	} else if body != "" {
 		body = renderRichText(th, width, body)
@@ -557,8 +720,15 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	parts := []string{roleStyle.Render(strings.ToUpper(message.Role))}
 
-	// Tile renders first so the headline metric is the first thing the
-	// user sees; the narrative reads as supporting context.
+	// Trace renders right after the role label so the reasoning timeline
+	// reads as supporting context above the actual answer body.
+	if trace := renderTrace(th, width, message); trace != "" {
+		parts = append(parts, trace)
+	}
+
+	// Tile renders next so the headline metric is the first thing the
+	// user sees in the answer body; the narrative reads as supporting
+	// context.
 	if message.Tile != nil {
 		format := components.TileFormatFromConfig(message.Tile.FormatConfig)
 		tile := components.RenderTile(th, max(width-8, 20), message.Tile.Label, message.Tile.Value, format)
@@ -576,6 +746,10 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 		parts = append(parts, th.Muted.Render("(no rows)"))
 	case message.Table != nil:
 		parts = append(parts, renderTable(th, message.Table))
+	case message.Chart != nil:
+		if rendered := renderChart(th, width, message.Chart); rendered != "" {
+			parts = append(parts, rendered)
+		}
 	case message.ChartType != "" && message.Tile == nil:
 		if badge := components.ChartBadge(th, message.ChartType); badge != "" {
 			parts = append(parts, badge)
@@ -602,7 +776,17 @@ func clampWidth(width int, fallback int) int {
 }
 
 func (m *Model) scrollToBottom() {
+	if m.userScrolled {
+		return
+	}
 	m.viewport.GotoBottom()
+}
+
+// noteUserScroll updates the sticky-scroll flag based on the viewport's
+// current position. Called after any input that moves the viewport so
+// streaming updates know whether to keep auto-scrolling.
+func (m *Model) noteUserScroll() {
+	m.userScrolled = !m.viewport.AtBottom()
 }
 
 func (m *Model) updateViewportDimensions() {
@@ -622,7 +806,7 @@ func (m *Model) updateViewportDimensions() {
 
 	// Calculate hints height.
 	hints := m.theme.KeyHint.Render(
-		"enter: submit  ·  shift+↑↓: scroll  ·  ctrl+l: clear  ·  ctrl+w: switch  ·  ctrl+c: quit",
+		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
 	)
 	hintsHeight := lipgloss.Height(hints)
 
