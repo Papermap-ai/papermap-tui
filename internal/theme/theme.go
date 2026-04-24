@@ -22,6 +22,15 @@ type Theme struct {
 	// it reads as distinct from assistant message accents.
 	InputAccent lipgloss.Style
 	InputBg     color.Color // Distinct background for the text input area.
+	// MutedColor and TextColor expose the raw palette entries so callers
+	// that style external widgets (textarea, buttons) can match the rest
+	// of the UI without re-declaring hex codes.
+	MutedColor       color.Color
+	TextColor        color.Color
+	ButtonBgInactive color.Color
+	// SplashLogo is the splash-screen logo color (white) kept distinct
+	// from the green brand accent.
+	SplashLogo color.Color
 }
 
 func Default() Theme {
@@ -61,8 +70,12 @@ func Default() Theme {
 		InputAccent: lipgloss.NewStyle().
 			Foreground(soft).
 			Bold(true),
-		LogoColorA: accent,
-		LogoColorB: soft,
-		InputBg:    inputBg,
+		LogoColorA:       accent,
+		LogoColorB:       soft,
+		InputBg:          inputBg,
+		MutedColor:       muted,
+		TextColor:        text,
+		ButtonBgInactive: lipgloss.Color("#2A2A35"),
+		SplashLogo:       lipgloss.Color("#FFFFFF"),
 	}
 }

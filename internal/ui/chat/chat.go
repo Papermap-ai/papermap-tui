@@ -91,21 +91,21 @@ func NewModel(th theme.Theme) Model {
 	ta.DynamicHeight = true
 
 	s := ta.Styles()
-	inputBg := lipgloss.Color("#11111B")
+	inputBg := th.InputBg
 	s.Focused.CursorLine = lipgloss.NewStyle().Background(inputBg)
 	s.Focused.Base = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#F2F5F4"))
+		Foreground(th.TextColor)
 	s.Focused.Text = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#F2F5F4"))
+		Foreground(th.TextColor)
 	s.Focused.EndOfBuffer = lipgloss.NewStyle().Background(inputBg)
 	s.Focused.Prompt = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#2ED8A3"))
+		Foreground(th.LogoColorA)
 	s.Focused.Placeholder = lipgloss.NewStyle().
 		Background(inputBg).
-		Foreground(lipgloss.Color("#97A6A8"))
+		Foreground(th.MutedColor)
 
 	s.Blurred = s.Focused
 	ta.SetStyles(s)
@@ -119,7 +119,7 @@ func NewModel(th theme.Theme) Model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#2ED8A3"))
+	sp.Style = lipgloss.NewStyle().Foreground(th.LogoColorA)
 
 	return Model{
 		textarea:       ta,

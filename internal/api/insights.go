@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,35 +15,23 @@ import (
 )
 
 type InsightRequest struct {
-	Prompt                  string         `json:"prompt"`
-	WorkspaceID             string         `json:"workspace_id"`
-	ChatID                  string         `json:"chat_id"`
-	ReportID                string         `json:"report_id,omitempty"`
-	RequestID               string         `json:"request_id,omitempty"`
-	LLMModel                string         `json:"llm_model,omitempty"`
-	UseSearch               *bool          `json:"use_search,omitempty"`
-	AllowWorkspaceSwitching bool           `json:"allow_workspace_switching"`
-	StreamExecution         bool           `json:"stream_execution"`
-	DisplayPrompt           string         `json:"display_prompt,omitempty"`
-	RundownMeta             map[string]any `json:"rundown_meta,omitempty"`
-	InteractionSource       string         `json:"interaction_source,omitempty"`
+	Prompt                  string `json:"prompt"`
+	WorkspaceID             string `json:"workspace_id"`
+	ChatID                  string `json:"chat_id"`
+	RequestID               string `json:"request_id,omitempty"`
+	UseSearch               *bool  `json:"use_search,omitempty"`
+	AllowWorkspaceSwitching bool   `json:"allow_workspace_switching"`
+	StreamExecution         bool   `json:"stream_execution"`
+	DisplayPrompt           string `json:"display_prompt,omitempty"`
+	InteractionSource       string `json:"interaction_source,omitempty"`
 }
 
 type InsightResponse struct {
 	LLMDataID           string         `json:"llm_data_id"`
-	ResponseType        string         `json:"response_type"`
 	TextResponse        string         `json:"text_response"`
-	Status              string         `json:"status,omitempty"`
-	Data                any            `json:"data"`
-	Code                string         `json:"code,omitempty"`
-	Error               bool           `json:"error"`
 	Thoughts            string         `json:"thoughts,omitempty"`
-	ThoughtLog          []any          `json:"thought_log,omitempty"`
 	ChartType           string         `json:"chart_type,omitempty"`
-	SchemaHints         map[string]any `json:"schema_hints,omitempty"`
-	CompleteQueryPlan   string         `json:"complete_query_task_plan,omitempty"`
 	VisualizationConfig map[string]any `json:"visualization_config,omitempty"`
-	ProgressEvents      []any          `json:"progress_events,omitempty"`
 	Raw                 map[string]any
 	// RawDataJSON holds the raw JSON bytes of the `data` field (or the
 	// nested `data.data` field when the backend wraps responses in an
@@ -66,10 +56,7 @@ func (r *InsightResponse) UnmarshalJSON(data []byte) error {
 	*r = InsightResponse(decoded)
 	r.Raw = raw
 	r.LLMDataID = firstString(decoded.LLMDataID, lookupString(raw, "llm_data_id"), lookupNestedString(raw, "data", "llm_data_id"))
-	r.ResponseType = firstString(decoded.ResponseType, lookupString(raw, "response_type"), lookupNestedString(raw, "data", "response_type"))
 	r.TextResponse = firstRawString(decoded.TextResponse, lookupRawString(raw, "text_response"), lookupNestedRawString(raw, "data", "text_response"))
-	r.Status = firstString(decoded.Status, lookupString(raw, "status"), lookupNestedString(raw, "data", "status"))
-	r.Code = firstRawString(decoded.Code, lookupRawString(raw, "code"), lookupNestedRawString(raw, "data", "code"))
 	r.Thoughts = firstRawString(decoded.Thoughts, lookupRawString(raw, "thoughts"), lookupNestedRawString(raw, "data", "thoughts"))
 	r.ChartType = firstString(decoded.ChartType, lookupString(raw, "chart_type"), lookupNestedString(raw, "data", "chart_type"))
 	r.RawDataJSON = extractRawDataField(data)
@@ -188,8 +175,17 @@ type InsightStream struct {
 	queued  []InsightStreamEvent
 }
 
+// GenerateRequestID returns a request id with a millisecond timestamp prefix
+// (kept for sortability) and 8 bytes of cryptographically random suffix so
+// concurrent callers cannot collide.
 func GenerateRequestID() string {
-	return fmt.Sprintf("chat_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano()%1_000_000)
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is exceptional; fall back to nanos so we
+		// still return *something* unique-ish per process tick.
+		return fmt.Sprintf("chat_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
 }
 
 func (c *Client) StartInsight(ctx context.Context, reqBody InsightRequest) (InsightResponse, error) {
