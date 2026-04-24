@@ -18,6 +18,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 	"github.com/papermap/papermap-tui/internal/ui/components"
+	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
 )
@@ -1197,7 +1198,7 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 	if response != nil {
 		message := buildAssistantMessage(response)
 		hasContent := strings.TrimSpace(message.Content) != "" ||
-			message.Table != nil || message.Tile != nil ||
+			message.Table != nil || message.Tile != nil || message.Chart != nil ||
 			message.EmptyData || message.ChartType != ""
 		if hasContent {
 			m.chat.ReplaceLastAssistant([]chat.Message{message})
@@ -1265,10 +1266,26 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 		}
 
 	default:
-		// Other chart types (bar/line/pie/scatter/area/radar) render
-		// with just the narrative + a chart-type badge. The legacy
-		// extractor still has a chance for ad-hoc table payloads.
-		if legacy := responseTable(response); legacy != nil {
+		// Bar and pie render via the charts package. Line, area,
+		// scatter, radar, and any unknown types fall through to the
+		// chart-type badge added by the chat renderer. The legacy
+		// extractor stays in play as a final fallback so ad-hoc
+		// table-shaped payloads remain visible.
+		if charts.IsSupported(chartType) {
+			table := api.BuildDataRowsTable(response.RawDataJSON)
+			if table == nil {
+				table = responseTable(response)
+			}
+			if table != nil {
+				message.Chart = &chat.Chart{
+					Type:   chartType,
+					Table:  table,
+					Config: response.Chart(),
+				}
+			} else {
+				message.EmptyData = true
+			}
+		} else if legacy := responseTable(response); legacy != nil {
 			message.Table = toChatTable(legacy)
 		}
 	}
