@@ -79,10 +79,35 @@ type startInsightResult struct {
 type insightChunkMsg struct {
 	chatID    string
 	requestID string
-	phase     string
 	status    string
 	done      bool
 	err       string
+	// trace carries an optional reasoning/tool event to forward to the
+	// chat model. Only one of the trace* fields is set per message.
+	trace *insightTraceDispatch
+}
+
+// insightTraceDispatch is the union of trace updates produced by the SSE
+// stream. The Update handler routes each variant to the matching chat
+// helper.
+type insightTraceDispatch struct {
+	// kind selects the variant: "thought", "step", "output", "complete".
+	kind string
+
+	// thought variant.
+	iteration       int
+	thoughtDelta    string
+	thoughtComplete bool
+
+	// step variant (newly created TraceStep, e.g. tool_call_announced /
+	// tool_call_args_complete).
+	step chat.TraceStep
+
+	// output / complete variants share these fields.
+	toolCallID  string
+	toolContent string
+	toolStatus  string
+	toolMS      float64
 }
 
 // sessionExpiredMsg signals that the stored credentials are no longer valid
@@ -319,10 +344,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
 
-		// SSE events are progress-only. Surface phase_update messages as a
-		// lightweight status line; ignore agent_thought and tool events.
+		// SSE events feed two surfaces: phase_update messages drive a
+		// short status line beside the spinner; reasoning and tool
+		// lifecycle events feed the per-message trace timeline.
 		if strings.TrimSpace(msg.status) != "" {
 			m.chat.SetStreamStatus(msg.status)
+		}
+		if msg.trace != nil {
+			m.applyTraceDispatch(msg.trace)
 		}
 
 		if !msg.done {
@@ -571,15 +600,12 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 }
 
 func (m Model) handleEscape() Model {
-	switch m.screen {
-	case screenWorkspacePicker:
+	if m.screen == screenWorkspacePicker {
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
 			m.screen = screenLanding
 		}
-	case screenChat:
-		m.screen = screenLanding
 	}
 
 	return m
@@ -861,24 +887,80 @@ func (m Model) continueInsightStream() tea.Cmd {
 			return insightChunkMsg{err: event.Error}
 		}
 
-		// Translate progress events into a status line. Ignore thinking and
-		// tool events entirely - they carry no user-facing final output.
+		// Translate progress events into a status line + optional trace
+		// dispatch. The status line tracks the agent's high-level phase
+		// (Analyzing, Running...) while the trace dispatch records each
+		// thought delta or tool lifecycle step.
 		status := ""
+		var trace *insightTraceDispatch
 		switch event.Type {
 		case "phase_update":
 			status = strings.TrimSpace(event.Message)
 			if status == "" {
 				status = humanizePhase(event.Phase)
 			}
+		case "agent_thought", "reasoning":
+			trace = &insightTraceDispatch{
+				kind:            "thought",
+				iteration:       event.Iteration,
+				thoughtDelta:    event.Content,
+				thoughtComplete: event.IsComplete,
+			}
+		case "tool_call_announced":
+			trace = &insightTraceDispatch{
+				kind: "step",
+				step: chat.TraceStep{
+					Kind:       chat.TraceToolCall,
+					ToolCallID: event.ToolCallID,
+					Title:      firstNonEmpty(event.ToolDisplayName, event.ToolName, "Tool call"),
+					Iteration:  event.Iteration,
+				},
+			}
+		case "tool_output":
+			if event.PrivateOutput {
+				break
+			}
+			trace = &insightTraceDispatch{
+				kind:        "output",
+				toolCallID:  event.ToolCallID,
+				toolContent: event.Content,
+			}
+		case "tool_call_complete":
+			trace = &insightTraceDispatch{
+				kind:        "complete",
+				toolCallID:  event.ToolCallID,
+				toolContent: event.ResultPreview,
+				toolStatus:  event.Status,
+				toolMS:      event.DurationMS,
+			}
 		}
 
 		return insightChunkMsg{
 			chatID:    event.ChatID,
 			requestID: event.RequestID,
-			phase:     event.Phase,
 			status:    status,
+			trace:     trace,
 			done:      event.Done,
 		}
+	}
+}
+
+// applyTraceDispatch routes a parsed SSE trace event to the chat model.
+// Splitting this out keeps the Update switch readable and makes it easy
+// to extend with new trace kinds.
+func (m *Model) applyTraceDispatch(d *insightTraceDispatch) {
+	if d == nil {
+		return
+	}
+	switch d.kind {
+	case "thought":
+		m.chat.MergeStreamThoughtDelta(d.iteration, d.thoughtDelta, d.thoughtComplete)
+	case "step":
+		m.chat.AppendStreamTrace(d.step)
+	case "output":
+		m.chat.AppendStreamToolOutputContent(d.toolCallID, d.toolContent)
+	case "complete":
+		m.chat.PairToolOutput(d.toolCallID, d.toolContent, d.toolStatus, d.toolMS)
 	}
 }
 
@@ -991,21 +1073,13 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// extractTableFromResponse pulls a table out of the HTTP response payload if
-// one is present in the raw JSON. The Data field on InsightResponse is a free
-// `any` whose shape varies, so we delegate to the existing extractor over the
-// raw map.
-func extractTableFromResponse(response *api.InsightResponse) *api.InsightTable {
+// responseTable returns the table parsed from an HTTP InsightResponse's raw
+// payload, or nil when no table is present.
+func responseTable(response *api.InsightResponse) *api.InsightTable {
 	if response == nil || response.Raw == nil {
 		return nil
 	}
-	return extractTableRaw(response.Raw)
-}
-
-// extractTableRaw is a thin local alias around api.ExtractTable so callers in
-// this file read consistently.
-func extractTableRaw(raw map[string]any) *api.InsightTable {
-	return api.ExtractTable(raw)
+	return api.ExtractTable(response.Raw)
 }
 
 // buildAssistantMessage converts an InsightResponse into a chat.Message,
@@ -1033,7 +1107,7 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 			message.Table = toChatTable(table)
 		} else {
 			// Fall back to legacy {columns, rows} extractor.
-			if legacy := extractTableFromResponse(response); legacy != nil {
+			if legacy := responseTable(response); legacy != nil {
 				message.Table = toChatTable(legacy)
 			} else {
 				message.EmptyData = true
@@ -1056,7 +1130,7 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 		// Other chart types (bar/line/pie/scatter/area/radar) render
 		// with just the narrative + a chart-type badge. The legacy
 		// extractor still has a chance for ad-hoc table payloads.
-		if legacy := extractTableFromResponse(response); legacy != nil {
+		if legacy := responseTable(response); legacy != nil {
 			message.Table = toChatTable(legacy)
 		}
 	}

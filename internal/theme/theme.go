@@ -15,7 +15,6 @@ type Theme struct {
 	Title      lipgloss.Style
 	Body       lipgloss.Style
 	Muted      lipgloss.Style
-	Status     lipgloss.Style
 	KeyHint    lipgloss.Style
 	Error      lipgloss.Style
 	Accent     lipgloss.Style
@@ -52,8 +51,6 @@ func Default() Theme {
 			Foreground(text),
 		Muted: lipgloss.NewStyle().
 			Foreground(muted),
-		Status: lipgloss.NewStyle().
-			Foreground(soft),
 		KeyHint: lipgloss.NewStyle().
 			Foreground(muted),
 		Error: lipgloss.NewStyle().
