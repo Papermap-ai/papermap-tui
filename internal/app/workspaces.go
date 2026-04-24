@@ -108,7 +108,7 @@ func (m Model) switchWorkspace(entry config.WorkspaceEntry) Model {
 		m.screen = screenChat
 		return m
 	}
-	m.closeStream()
+	m.cancelInsight()
 	m.resetInsightState()
 	m.chat.Clear()
 	m.workspaceID = entry.WorkspaceID

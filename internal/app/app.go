@@ -153,9 +153,11 @@ type Model struct {
 	confirmQuit      bool
 	confirmQuitYes   bool
 	// insightCancel is the cancel func for the in-flight insight request.
-	// It is set when startInsight kicks off and called from closeStream
-	// so HTTP and SSE goroutines unwind cleanly on quit / Clear / switch
-	// workspace / session expiry.
+	// It is set when startInsight kicks off and called from cancelInsight
+	// on user-initiated teardown (Clear / switch workspace / quit /
+	// session expiry). Closing the SSE alone (closeStream) does NOT
+	// cancel the HTTP body: that POST is the authoritative source of the
+	// final answer and outlives the SSE complete sentinel.
 	insightCancel context.CancelFunc
 }
 
@@ -340,8 +342,8 @@ func (m Model) handleWorkspaceLoaded(msg workspaceLoadedMsg) Model {
 }
 
 func (m Model) handleInsightStartPair(msg insightStartPair) (tea.Model, tea.Cmd) {
-	// Stash the cancel func so closeStream can tear down the in-flight
-	// HTTP/SSE goroutines on quit / Clear / workspace switch.
+	// Stash the cancel func so cancelInsight can tear down the in-flight
+	// HTTP/SSE goroutines on user-initiated teardown.
 	m.insightCancel = msg.cancel
 	newModel, startCmd := m.Update(msg.started)
 	httpCmd := awaitInsightHTTPResult(msg.httpResult)
@@ -421,7 +423,7 @@ func (m Model) handleInsightChunk(msg insightChunkMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) {
-	m.closeStream()
+	m.cancelInsight()
 	m.resetInsightState()
 	m.authenticated = false
 	m.user = auth.User{}
@@ -481,7 +483,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyClearChat:
-		m.closeStream()
+		m.cancelInsight()
 		m.resetInsightState()
 		m.chat.Clear()
 		return m, nil
@@ -1145,16 +1147,26 @@ func (m *Model) applyWorkspace(workspace *api.UnifiedWorkspace) {
 	}
 }
 
+// closeStream closes the SSE subscription without cancelling the parent
+// ctx. Use this when SSE has reached its terminal state (complete / error)
+// but the HTTP POST may still be in flight delivering the final answer.
 func (m *Model) closeStream() {
-	if m.insightCancel != nil {
-		m.insightCancel()
-		m.insightCancel = nil
-	}
 	if m.stream == nil {
 		return
 	}
 	_ = m.stream.Close()
 	m.stream = nil
+}
+
+// cancelInsight tears down both the SSE subscription and the in-flight
+// HTTP POST. Use this on user-initiated paths (Clear, switch workspace,
+// session expiry, quit) where any pending answer should be discarded.
+func (m *Model) cancelInsight() {
+	if m.insightCancel != nil {
+		m.insightCancel()
+		m.insightCancel = nil
+	}
+	m.closeStream()
 }
 
 // resetInsightState clears per-request buffers and coordination flags. Call
@@ -1165,6 +1177,9 @@ func (m *Model) resetInsightState() {
 	m.pendingRequestID = ""
 	m.httpReceived = false
 	m.sseComplete = false
+	// Drop the cancel reference; the request has terminated (success or
+	// failure) and any later teardown should be a no-op.
+	m.insightCancel = nil
 }
 
 // tryFinalizeInsight renders the final assistant message once BOTH the HTTP
