@@ -15,7 +15,19 @@
 - [x] Figure out how to fix scrolling with the mouse
 
 ## Phase Two
+- [x] Figure out how to display the content as it streams, particularly the thinking process.
+- [ ] Add rendering of the different types of charts
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Figure out how to run shell commands in the chat
-- [ ] Figure out how to display the content as it streams, particularly the thinking process.
 - [ ] think about the ability to prepend some things like an md file to the prompts that you send to Alan
+
+## Code Quality Followups
+- [x] Wire `context.Context` cancellation through SSE/HTTP insight goroutines so quit / Clear / workspace switch tear down cleanly (today they use `context.Background()`).
+- [x] Carry session-expiry detection through `insightHTTPResultMsg` (currently dropped in `app.go`'s HTTP-only error path, so users can stay signed-in with stale creds).
+- [x] Extract `Model.Update` (cyclomatic 53) into per-message handlers (`handleStartup`, `handleWorkspacesLoaded`, `handleInsight*`, `handleSessionExpired`, `handleKeyPress`).
+- [x] `GenerateRequestID` collisions: replace `time.Now()` modulo trick with `crypto/rand` or UUID.
+- [x] `startInsightWithRetry` uses `time.Sleep` ignoring ctx — switch to `time.NewTimer` + `select`.
+- [x] `sessionExpiredFromError` falls back to substring matching because some `fmt.Errorf("%v", err)` breaks `errors.Is`/`Unwrap`. Find the offending `%v` and switch to `%w`.
+- [x] Centralise duplicated overlay-centering logic (`overlayQuitDialog` vs `overlayWorkspacePicker`).
+- [x] Decide on dead `InsightResponse`/`InsightRequest` fields: trim or comment as forward-compat.
+- [x] Move repeated hex colors (`#2ED8A3`, etc.) into `internal/theme`.

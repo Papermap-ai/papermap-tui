@@ -4,6 +4,8 @@ import (
 	"image/color"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 )
 
 type Theme struct {
@@ -15,7 +17,6 @@ type Theme struct {
 	Title      lipgloss.Style
 	Body       lipgloss.Style
 	Muted      lipgloss.Style
-	Status     lipgloss.Style
 	KeyHint    lipgloss.Style
 	Error      lipgloss.Style
 	Accent     lipgloss.Style
@@ -23,6 +24,15 @@ type Theme struct {
 	// it reads as distinct from assistant message accents.
 	InputAccent lipgloss.Style
 	InputBg     color.Color // Distinct background for the text input area.
+	// MutedColor and TextColor expose the raw palette entries so callers
+	// that style external widgets (textarea, buttons) can match the rest
+	// of the UI without re-declaring hex codes.
+	MutedColor       color.Color
+	TextColor        color.Color
+	ButtonBgInactive color.Color
+	// SplashLogo is the splash-screen logo color (white) kept distinct
+	// from the green brand accent.
+	SplashLogo color.Color
 }
 
 func Default() Theme {
@@ -52,8 +62,6 @@ func Default() Theme {
 			Foreground(text),
 		Muted: lipgloss.NewStyle().
 			Foreground(muted),
-		Status: lipgloss.NewStyle().
-			Foreground(soft),
 		KeyHint: lipgloss.NewStyle().
 			Foreground(muted),
 		Error: lipgloss.NewStyle().
@@ -64,8 +72,34 @@ func Default() Theme {
 		InputAccent: lipgloss.NewStyle().
 			Foreground(soft).
 			Bold(true),
-		LogoColorA: accent,
-		LogoColorB: soft,
-		InputBg:    inputBg,
+		LogoColorA:       accent,
+		LogoColorB:       soft,
+		InputBg:          inputBg,
+		MutedColor:       muted,
+		TextColor:        text,
+		ButtonBgInactive: lipgloss.Color("#2A2A35"),
+		SplashLogo:       lipgloss.Color("#FFFFFF"),
+	}
+}
+
+// ChartPalette projects the theme onto the charts.Palette contract so chart
+// renderers stay decoupled from the broader theme surface. The series
+// rotation is tuned for terminal contrast against the panel background
+// while still echoing the brand accent as the lead color.
+func (t Theme) ChartPalette() charts.Palette {
+	return charts.Palette{
+		Series: []color.Color{
+			t.LogoColorA,          // brand green leads.
+			t.LogoColorB,          // soft mint complements.
+			lipgloss.Color("39"),  // blue.
+			lipgloss.Color("214"), // orange.
+			lipgloss.Color("213"), // pink.
+			lipgloss.Color("226"), // yellow.
+			lipgloss.Color("105"), // purple.
+		},
+		Axis:  t.MutedColor,
+		Grid:  lipgloss.Color("238"),
+		Label: t.TextColor,
+		Muted: t.Muted,
 	}
 }

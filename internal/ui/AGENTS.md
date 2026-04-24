@@ -61,17 +61,18 @@ style decisions in `internal/theme` once they are shared across screens.
 - Keyboard-first always.
 - Make the focused control obvious.
 - Keep key bindings consistent across screens.
-- Use `Esc` for cancel/back where appropriate.
+- Use `Esc` to dismiss overlays and modal pickers (not to leave the
+  main chat).
 - Keep loading states visible but low-noise.
 
-Planned default bindings:
+Default bindings:
 
 - `Enter` submit or confirm.
 - `Tab` switch focus in forms.
 - `Ctrl+W` switch workspace.
-- `Ctrl+L` clear chat.
+- `Ctrl+T` toggle assistant thinking traces (show/hide all).
 - `Ctrl+C` quit.
-- `Esc` cancel or go back.
+- `Esc` cancel or close an open picker / overlay.
 
 ## Rendering Insight Output
 

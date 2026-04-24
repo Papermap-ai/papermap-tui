@@ -18,6 +18,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 	"github.com/papermap/papermap-tui/internal/ui/components"
+	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
 )
@@ -67,6 +68,10 @@ type insightHTTPResultMsg struct {
 	requestID string
 	response  *api.InsightResponse
 	err       string
+	// sessionExpired indicates the HTTP error was an auth.ErrSessionExpired
+	// so the Update handler can route to sessionExpiredMsg instead of
+	// surfacing the raw error.
+	sessionExpired bool
 }
 
 type startInsightResult struct {
@@ -79,10 +84,35 @@ type startInsightResult struct {
 type insightChunkMsg struct {
 	chatID    string
 	requestID string
-	phase     string
 	status    string
 	done      bool
 	err       string
+	// trace carries an optional reasoning/tool event to forward to the
+	// chat model. Only one of the trace* fields is set per message.
+	trace *insightTraceDispatch
+}
+
+// insightTraceDispatch is the union of trace updates produced by the SSE
+// stream. The Update handler routes each variant to the matching chat
+// helper.
+type insightTraceDispatch struct {
+	// kind selects the variant: "thought", "step", "output", "complete".
+	kind string
+
+	// thought variant.
+	iteration       int
+	thoughtDelta    string
+	thoughtComplete bool
+
+	// step variant (newly created TraceStep, e.g. tool_call_announced /
+	// tool_call_args_complete).
+	step chat.TraceStep
+
+	// output / complete variants share these fields.
+	toolCallID  string
+	toolContent string
+	toolStatus  string
+	toolMS      float64
 }
 
 // sessionExpiredMsg signals that the stored credentials are no longer valid
@@ -123,6 +153,13 @@ type Model struct {
 	spinner          spinner.Model
 	confirmQuit      bool
 	confirmQuitYes   bool
+	// insightCancel is the cancel func for the in-flight insight request.
+	// It is set when startInsight kicks off and called from cancelInsight
+	// on user-initiated teardown (Clear / switch workspace / quit /
+	// session expiry). Closing the SSE alone (closeStream) does NOT
+	// cancel the HTTP body: that POST is the authoritative source of the
+	// final answer and outlives the SSE complete sentinel.
+	insightCancel context.CancelFunc
 }
 
 func Run() error {
@@ -170,238 +207,288 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case startupMsg:
-		m.config = msg.config
-		m.authenticated = msg.authenticated
-		m.client = msg.client
-		m.startupErr = msg.err
-		m.applyWorkspace(msg.workspace)
-		if m.authenticated {
-			if cred, err := m.store.Load(); err == nil {
-				m.user = cred.User
-			}
-			m.screen = screenChat
-			if m.shouldRefreshWorkspaces() {
-				return m, loadWorkspacesCmd(m.client)
-			}
-		} else {
-			m.landingMessage = "You're not signed in to Papermap."
-			m.screen = screenLanding
-		}
-		return m, nil
-
+		return m.handleStartup(msg)
 	case spinner.TickMsg:
-		if m.screen == screenSplash {
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			return m, cmd
-		}
-		if m.screen == screenChat {
-			updatedChat, cmd := m.chat.Update(msg)
-			m.chat = updatedChat
-			return m, cmd
-		}
-		return m, nil
-
+		return m.handleSpinnerTick(msg)
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		updatedChat, cmd := m.chat.Update(msg)
-		m.chat = updatedChat
-		return m, cmd
-
+		return m.handleWindowSize(msg)
 	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
-		// Forward mouse events to the chat viewport so wheel scrolling
-		// works. Other screens have no scrollable surface today.
-		if m.screen == screenChat {
-			updatedChat, cmd := m.chat.Update(msg)
-			m.chat = updatedChat
-			return m, cmd
-		}
-		return m, nil
-
+		return m.forwardChatIfActive(msg)
 	case workspacesLoadedMsg:
-		if msg.err != nil || len(msg.entries) == 0 {
-			// Non-fatal. Keep whatever we already have cached. If the picker
-			// is open in a loading state, surface an empty result so it stops
-			// spinning instead of hanging on "Loading...".
-			if m.screen == screenWorkspacePicker && len(m.workspaces) == 0 {
-				m.workspace.SetWorkspaces(nil, m.workspaceID)
-			}
-			return m, nil
-		}
-		m.workspaces = msg.entries
-		m.workspacesAt = time.Now().UTC()
-		_ = config.SaveWorkspaces(config.WorkspaceCache{
-			Workspaces: msg.entries,
-			UpdatedAt:  m.workspacesAt,
-		})
-		// If the picker is currently open waiting on this fetch, refresh it
-		// in place so the loading state clears.
-		if m.screen == screenWorkspacePicker {
-			m.workspace.SetWorkspaces(m.workspaces, m.workspaceID)
-		}
-		return m, nil
-
+		return m.handleWorkspacesLoaded(msg), nil
 	case workspace.SelectMsg:
 		return m.switchWorkspace(msg.Workspace), nil
-
 	case workspace.CancelMsg:
-		if m.authenticated {
-			m.screen = screenChat
-		} else {
-			m.screen = screenLanding
-		}
-		return m, nil
-
+		return m.handleWorkspaceCancel(), nil
 	case workspaceLoadedMsg:
-		if msg.err != "" {
-			// Workspace load errors are non-fatal - user can still use chat.
-			return m, nil
-		}
-		m.applyWorkspace(msg.workspace)
-		return m, nil
-
+		return m.handleWorkspaceLoaded(msg), nil
 	case chat.SubmitMsg:
-		// Clear startup errors once user is actively using chat.
+		// Clear startup errors once the user is actively chatting.
 		m.startupErr = nil
 		return m, m.startInsight(msg)
-
 	case insightStartPair:
-		// Dispatch the SSE startup outcome through the normal handler and
-		// kick off the HTTP-result waiter in parallel.
-		newModel, startCmd := m.Update(msg.started)
-		httpCmd := awaitInsightHTTPResult(msg.httpResult)
-		return newModel, tea.Batch(startCmd, httpCmd)
-
+		return m.handleInsightStartPair(msg)
 	case insightStartedMsg:
-		if msg.err != "" {
-			m.chat.FailStream(msg.err)
-			return m, nil
-		}
-
-		m.stream = msg.stream
-		m.pendingRequestID = msg.requestID
-		m.httpReceived = false
-		m.sseComplete = false
-		m.pendingResponse = nil
-		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
-		if msg.stream == nil {
-			// No SSE stream available (opening failed silently upstream, or
-			// we received the response synchronously). Fall back to awaiting
-			// just the HTTP result.
-			m.sseComplete = true
-			return m, nil
-		}
-		return m, m.continueInsightStream()
-
+		return m.handleInsightStarted(msg)
 	case insightHTTPResultMsg:
-		if msg.err != "" {
-			m.closeStream()
-			m.resetInsightState()
-			m.chat.FailStream(msg.err)
-			return m, nil
-		}
-		// Ignore stale results from a previous request.
-		if msg.requestID != "" && m.pendingRequestID != "" && msg.requestID != m.pendingRequestID {
-			return m, nil
-		}
-		m.pendingResponse = msg.response
-		m.httpReceived = true
-		return m.tryFinalizeInsight()
-
+		return m.handleInsightHTTPResult(msg)
 	case insightChunkMsg:
-		if msg.err != "" {
-			m.closeStream()
-			m.resetInsightState()
-			m.chat.FailStream(msg.err)
-			return m, nil
-		}
-
-		m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
-
-		// SSE events are progress-only. Surface phase_update messages as a
-		// lightweight status line; ignore agent_thought and tool events.
-		if strings.TrimSpace(msg.status) != "" {
-			m.chat.SetStreamStatus(msg.status)
-		}
-
-		if !msg.done {
-			return m, m.continueInsightStream()
-		}
-
-		// `complete` sentinel received. Close the SSE, then finalize if the
-		// HTTP body has also arrived.
-		m.closeStream()
-		m.sseComplete = true
-		return m.tryFinalizeInsight()
-
+		return m.handleInsightChunk(msg)
 	case sessionExpiredMsg:
+		return m.handleSessionExpired(msg)
+	case tea.KeyPressMsg:
+		return m.handleKeyPress(msg)
+	}
+	return m, nil
+}
+
+func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
+	m.config = msg.config
+	m.authenticated = msg.authenticated
+	m.client = msg.client
+	m.startupErr = msg.err
+	m.applyWorkspace(msg.workspace)
+	if m.authenticated {
+		if cred, err := m.store.Load(); err == nil {
+			m.user = cred.User
+		}
+		m.screen = screenChat
+		if m.shouldRefreshWorkspaces() {
+			return m, loadWorkspacesCmd(m.client)
+		}
+		return m, nil
+	}
+	m.landingMessage = "You're not signed in to Papermap."
+	m.screen = screenLanding
+	return m, nil
+}
+
+func (m Model) handleSpinnerTick(msg spinner.TickMsg) (tea.Model, tea.Cmd) {
+	if m.screen == screenSplash {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+	if m.screen == screenChat {
+		return m.forwardToChat(msg)
+	}
+	return m, nil
+}
+
+func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	return m.forwardToChat(msg)
+}
+
+// forwardChatIfActive forwards msg to the chat model only when the chat
+// screen is the active surface. Used for mouse events that have no meaning
+// on other screens.
+func (m Model) forwardChatIfActive(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.screen != screenChat {
+		return m, nil
+	}
+	return m.forwardToChat(msg)
+}
+
+// forwardToChat threads msg through chat.Model.Update and stores the
+// returned model. Centralizing this avoids the four-line repetition that
+// otherwise leaks throughout Update.
+func (m Model) forwardToChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updatedChat, cmd := m.chat.Update(msg)
+	m.chat = updatedChat
+	return m, cmd
+}
+
+func (m Model) handleWorkspacesLoaded(msg workspacesLoadedMsg) Model {
+	if msg.err != nil || len(msg.entries) == 0 {
+		// Non-fatal. Keep whatever we already have cached. If the picker
+		// is open in a loading state, surface an empty result so it stops
+		// spinning instead of hanging on "Loading...".
+		if m.screen == screenWorkspacePicker && len(m.workspaces) == 0 {
+			m.workspace.SetWorkspaces(nil, m.workspaceID)
+		}
+		return m
+	}
+	m.workspaces = msg.entries
+	m.workspacesAt = time.Now().UTC()
+	_ = config.SaveWorkspaces(config.WorkspaceCache{
+		Workspaces: msg.entries,
+		UpdatedAt:  m.workspacesAt,
+	})
+	// If the picker is currently open waiting on this fetch, refresh it
+	// in place so the loading state clears.
+	if m.screen == screenWorkspacePicker {
+		m.workspace.SetWorkspaces(m.workspaces, m.workspaceID)
+	}
+	return m
+}
+
+func (m Model) handleWorkspaceCancel() Model {
+	if m.authenticated {
+		m.screen = screenChat
+	} else {
+		m.screen = screenLanding
+	}
+	return m
+}
+
+func (m Model) handleWorkspaceLoaded(msg workspaceLoadedMsg) Model {
+	if msg.err != "" {
+		// Workspace load errors are non-fatal - user can still use chat.
+		return m
+	}
+	m.applyWorkspace(msg.workspace)
+	return m
+}
+
+func (m Model) handleInsightStartPair(msg insightStartPair) (tea.Model, tea.Cmd) {
+	// Stash the cancel func so cancelInsight can tear down the in-flight
+	// HTTP/SSE goroutines on user-initiated teardown.
+	m.insightCancel = msg.cancel
+	newModel, startCmd := m.Update(msg.started)
+	httpCmd := awaitInsightHTTPResult(msg.httpResult)
+	return newModel, tea.Batch(startCmd, httpCmd)
+}
+
+func (m Model) handleInsightStarted(msg insightStartedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != "" {
+		m.chat.FailStream(msg.err)
+		return m, nil
+	}
+	m.stream = msg.stream
+	m.pendingRequestID = msg.requestID
+	m.httpReceived = false
+	m.sseComplete = false
+	m.pendingResponse = nil
+	m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
+	if msg.stream == nil {
+		// No SSE stream available (opening failed silently upstream, or
+		// we received the response synchronously). Fall back to awaiting
+		// just the HTTP result.
+		m.sseComplete = true
+		return m, nil
+	}
+	return m, m.continueInsightStream()
+}
+
+func (m Model) handleInsightHTTPResult(msg insightHTTPResultMsg) (tea.Model, tea.Cmd) {
+	if msg.sessionExpired {
+		return m.Update(sessionExpiredMsg{
+			reason: "Your session expired. Please sign in again.",
+		})
+	}
+	if msg.err != "" {
 		m.closeStream()
 		m.resetInsightState()
-		m.authenticated = false
-		m.user = auth.User{}
-		_ = m.store.Clear()
-		_ = config.ClearWorkspaces()
-		m.workspaces = nil
-		m.workspacesAt = time.Time{}
-		m.chat.Clear()
-		reason := strings.TrimSpace(msg.reason)
-		if reason == "" {
-			reason = "Your session expired. Run `papermap auth login` to sign in again."
-		}
-		m.landingMessage = reason
-		m.screen = screenLanding
+		m.chat.FailStream(msg.err)
+		return m, nil
+	}
+	// Ignore stale results from a previous request.
+	if msg.requestID != "" && m.pendingRequestID != "" && msg.requestID != m.pendingRequestID {
+		return m, nil
+	}
+	m.pendingResponse = msg.response
+	m.httpReceived = true
+	return m.tryFinalizeInsight()
+}
+
+func (m Model) handleInsightChunk(msg insightChunkMsg) (tea.Model, tea.Cmd) {
+	if msg.err != "" {
+		m.closeStream()
+		m.resetInsightState()
+		m.chat.FailStream(msg.err)
+		return m, nil
+	}
+	m.chat.SetStreamingIDs(msg.chatID, msg.requestID)
+
+	// SSE events feed two surfaces: phase_update messages drive a short
+	// status line beside the spinner; reasoning and tool lifecycle events
+	// feed the per-message trace timeline.
+	if strings.TrimSpace(msg.status) != "" {
+		m.chat.SetStreamStatus(msg.status)
+	}
+	if msg.trace != nil {
+		m.applyTraceDispatch(msg.trace)
+	}
+
+	if !msg.done {
+		return m, m.continueInsightStream()
+	}
+
+	// `complete` sentinel received. Close the SSE, then finalize if the
+	// HTTP body has also arrived.
+	m.closeStream()
+	m.sseComplete = true
+	return m.tryFinalizeInsight()
+}
+
+func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) {
+	m.cancelInsight()
+	m.resetInsightState()
+	m.authenticated = false
+	m.user = auth.User{}
+	_ = m.store.Clear()
+	_ = config.ClearWorkspaces()
+	m.workspaces = nil
+	m.workspacesAt = time.Time{}
+	m.chat.Clear()
+	reason := strings.TrimSpace(msg.reason)
+	if reason == "" {
+		reason = "Your session expired. Run `papermap auth login` to sign in again."
+	}
+	m.landingMessage = reason
+	m.screen = screenLanding
+	return m, tea.Quit
+}
+
+func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.confirmQuit {
+		return m.updateQuitConfirm(msg)
+	}
+
+	if msg.String() == keyQuit {
+		m.confirmQuit = true
+		m.confirmQuitYes = false
+		return m, nil
+	}
+
+	if m.screen == screenWorkspacePicker {
+		updatedPicker, cmd := m.workspace.Update(msg)
+		m.workspace = updatedPicker
+		return m, cmd
+	}
+
+	if m.screen == screenLanding && !m.authenticated {
+		// Unauthenticated landing is a terminal screen; any key quits so
+		// the user can run `papermap auth login`.
 		return m, tea.Quit
+	}
 
-	case tea.KeyPressMsg:
-		if m.confirmQuit {
-			return m.updateQuitConfirm(msg)
-		}
-
-		if msg.String() == keyQuit {
-			m.confirmQuit = true
-			m.confirmQuitYes = false
-			return m, nil
-		}
-
-		if m.screen == screenWorkspacePicker {
-			updatedPicker, cmd := m.workspace.Update(msg)
-			m.workspace = updatedPicker
+	if m.screen == screenChat {
+		updatedChat, cmd := m.chat.Update(msg)
+		m.chat = updatedChat
+		if cmd != nil {
 			return m, cmd
-		}
-
-		if m.screen == screenLanding && !m.authenticated {
-			// Unauthenticated landing is a terminal screen; any key quits
-			// so the user can run `papermap auth login`.
-			return m, tea.Quit
-		}
-
-		if m.screen == screenChat {
-			updatedChat, cmd := m.chat.Update(msg)
-			m.chat = updatedChat
-			if cmd != nil {
-				return m, cmd
-			}
-		}
-
-		switch msg.String() {
-		case keyEscape:
-			return m.handleEscape(), nil
-		case keyEnter:
-			return m.handleEnter(), nil
-		case keySwitchWorkspace:
-			if m.authenticated && m.screen == screenChat {
-				m.openWorkspacePicker()
-			}
-			return m, nil
-		case keyClearChat:
-			m.closeStream()
-			m.resetInsightState()
-			m.chat.Clear()
-			return m, nil
 		}
 	}
 
+	switch msg.String() {
+	case keyEscape:
+		return m.handleEscape(), nil
+	case keyEnter:
+		return m.handleEnter(), nil
+	case keySwitchWorkspace:
+		if m.authenticated && m.screen == screenChat {
+			m.openWorkspacePicker()
+		}
+		return m, nil
+	case keyClearChat:
+		m.cancelInsight()
+		m.resetInsightState()
+		m.chat.Clear()
+		return m, nil
+	}
 	return m, nil
 }
 
@@ -445,8 +532,13 @@ func (m Model) overlayQuitDialog(base string) string {
 		No:          "Nope",
 		YesSelected: m.confirmQuitYes,
 	}
-	overlay := dialog.View(m.theme, m.width)
+	return m.centerOverlay(base, dialog.View(m.theme, m.width))
+}
 
+// centerOverlay composites overlay over base with the overlay centered both
+// horizontally and vertically. Falls back to terminal width/height when the
+// rendered base has zero extent (e.g. before the first WindowSizeMsg).
+func (m Model) centerOverlay(base, overlay string) string {
 	baseW := lipgloss.Width(base)
 	baseH := lipgloss.Height(base)
 	if baseW <= 0 && m.width > 0 {
@@ -456,10 +548,8 @@ func (m Model) overlayQuitDialog(base string) string {
 		baseH = m.height
 	}
 
-	ow := lipgloss.Width(overlay)
-	oh := lipgloss.Height(overlay)
-	x := (baseW - ow) / 2
-	y := (baseH - oh) / 2
+	x := (baseW - lipgloss.Width(overlay)) / 2
+	y := (baseH - lipgloss.Height(overlay)) / 2
 	if x < 0 {
 		x = 0
 	}
@@ -469,7 +559,6 @@ func (m Model) overlayQuitDialog(base string) string {
 
 	baseLayer := lipgloss.NewLayer(base).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
-
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
 }
 
@@ -571,15 +660,12 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 }
 
 func (m Model) handleEscape() Model {
-	switch m.screen {
-	case screenWorkspacePicker:
+	if m.screen == screenWorkspacePicker {
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
 			m.screen = screenLanding
 		}
-	case screenChat:
-		m.screen = screenLanding
 	}
 
 	return m
@@ -658,15 +744,18 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 	// fan out two parallel commands:
 	//   1. Fire the HTTP POST /charts/stream and deliver its final response.
 	//   2. Subscribe to the SSE progress stream for the same request_id.
-	// Both have to share a single request_id, so we do the prep work in the
-	// outer closure and return a tea.Batch of both commands.
+	// Both have to share a single request_id and a single ctx, so we do the
+	// prep work in the outer closure and return a composite message.
 	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+
 		chatID := m.chat.ChatID()
 		if chatID == "" && strings.TrimSpace(m.defaultDashboard) != "" {
-			created, err := m.client.CreateChat(context.Background(), api.ChatCreateRequest{
+			created, err := m.client.CreateChat(ctx, api.ChatCreateRequest{
 				DashboardID: m.defaultDashboard,
 			})
 			if err != nil {
+				cancel()
 				if expired, ok := sessionExpiredFromError(err); ok {
 					return expired
 				}
@@ -690,17 +779,19 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 		}
 
 		// HTTP call runs in a goroutine so its result can be picked up by a
-		// dedicated tea.Cmd below. Buffered so the goroutine never blocks.
+		// dedicated tea.Cmd below. Buffered so the goroutine never blocks
+		// even if Update has already torn the request down.
 		httpResult := make(chan insightHTTPResultMsg, 1)
 		client := m.client
 		go func() {
-			response, err := client.StartInsight(context.Background(), request)
+			response, err := client.StartInsight(ctx, request)
 			if err != nil {
-				if expired, ok := sessionExpiredFromError(err); ok {
-					// Surface session-expiry by setting an error so the UI
-					// routes through sessionExpiredFromError at receive time.
-					_ = expired
-					httpResult <- insightHTTPResultMsg{requestID: requestID, err: err.Error()}
+				if _, ok := sessionExpiredFromError(err); ok {
+					httpResult <- insightHTTPResultMsg{
+						requestID:      requestID,
+						err:            err.Error(),
+						sessionExpired: true,
+					}
 					return
 				}
 				httpResult <- insightHTTPResultMsg{requestID: requestID, err: err.Error()}
@@ -711,7 +802,7 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 
 		// Open the SSE subscription with a small retry loop. This must race
 		// with the HTTP call so the request_id is already registered.
-		result := startInsightWithRetry(m.client, chatID, requestID)
+		result := startInsightWithRetry(ctx, m.client, chatID, requestID)
 		started := insightStartedMsg{
 			chatID:    result.chatID,
 			requestID: result.requestID,
@@ -719,29 +810,30 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 		}
 		if result.err != nil {
 			if expired, ok := sessionExpiredFromError(result.err); ok {
-				// Drain the HTTP goroutine so it doesn't leak, then route to
-				// session-expired.
-				go func() { <-httpResult }()
+				cancel()
 				return expired
 			}
 			started.err = result.err.Error()
 		}
 
-		// Return a composite message carrying the started event plus a
-		// follow-up command that awaits the HTTP body.
+		// Return a composite message carrying the started event, the HTTP
+		// result channel, and the cancel func so Update can stash it.
 		return insightStartPair{
 			started:    started,
 			httpResult: httpResult,
+			cancel:     cancel,
 		}
 	}
 }
 
-// insightStartPair is an internal message used to hand off both the SSE
-// startup outcome and a channel that will deliver the HTTP response once it
-// resolves. The Update handler splits this into the two real messages.
+// insightStartPair is an internal message used to hand off the SSE startup
+// outcome, the channel that will deliver the HTTP response, and the cancel
+// func that tears both down. The Update handler splits this into the two
+// real messages and stashes the cancel func on the model.
 type insightStartPair struct {
 	started    insightStartedMsg
 	httpResult <-chan insightHTTPResultMsg
+	cancel     context.CancelFunc
 }
 
 func awaitInsightHTTPResult(ch <-chan insightHTTPResultMsg) tea.Cmd {
@@ -750,15 +842,32 @@ func awaitInsightHTTPResult(ch <-chan insightHTTPResultMsg) tea.Cmd {
 	}
 }
 
-func startInsightWithRetry(client *api.Client, chatID string, requestID string) startInsightResult {
-	time.Sleep(150 * time.Millisecond)
+// startInsightWithRetry opens the SSE subscription, retrying briefly while
+// the backend registers the request_id. Backoff is exponential with a small
+// jitter so a flock of clients does not synchronize. The retry loop respects
+// ctx cancellation so quits and workspace switches do not block on a
+// retry sleep.
+func startInsightWithRetry(ctx context.Context, client *api.Client, chatID string, requestID string) startInsightResult {
+	const (
+		initialBackoff = 150 * time.Millisecond
+		maxBackoff     = 1200 * time.Millisecond
+		maxAttempts    = 6
+	)
+
+	if !sleepCtx(ctx, initialBackoff) {
+		return startInsightResult{chatID: chatID, requestID: requestID, err: ctx.Err()}
+	}
 
 	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		stream, err := client.OpenInsightStream(context.Background(), api.InsightStreamRequest{RequestID: requestID})
+	backoff := initialBackoff
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		stream, err := client.OpenInsightStream(ctx, api.InsightStreamRequest{RequestID: requestID})
 		if err != nil {
 			lastErr = err
-			time.Sleep(150 * time.Millisecond)
+			if !sleepCtx(ctx, jittered(backoff)) {
+				return startInsightResult{chatID: chatID, requestID: requestID, err: ctx.Err()}
+			}
+			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
 
@@ -774,7 +883,10 @@ func startInsightWithRetry(client *api.Client, chatID string, requestID string) 
 		_ = stream.Close()
 		if shouldRetryStreamRace(firstEvent, err) {
 			lastErr = raceError(firstEvent, err)
-			time.Sleep(150 * time.Millisecond)
+			if !sleepCtx(ctx, jittered(backoff)) {
+				return startInsightResult{chatID: chatID, requestID: requestID, err: ctx.Err()}
+			}
+			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
 
@@ -789,8 +901,44 @@ func startInsightWithRetry(client *api.Client, chatID string, requestID string) 
 	if lastErr == nil {
 		lastErr = errors.New("stream did not become ready")
 	}
-
 	return startInsightResult{chatID: chatID, requestID: requestID, err: lastErr}
+}
+
+// sleepCtx blocks for d or until ctx is done. Returns false when ctx ended
+// first so callers can short-circuit their retry loop.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// jittered returns d perturbed by up to ±25% so concurrent retriers do not
+// synchronize their backoff intervals.
+func jittered(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	// Use crypto-grade randomness via time.Now nanos as a cheap jitter
+	// source; this does not need to be unpredictable, just decorrelated.
+	nanos := time.Now().UnixNano()
+	delta := (nanos % int64(d/2)) - int64(d/4)
+	return d + time.Duration(delta)
+}
+
+func nextBackoff(current, max time.Duration) time.Duration {
+	next := current * 2
+	if next > max {
+		return max
+	}
+	return next
 }
 
 func shouldRetryStreamRace(event api.InsightStreamEvent, err error) bool {
@@ -861,24 +1009,80 @@ func (m Model) continueInsightStream() tea.Cmd {
 			return insightChunkMsg{err: event.Error}
 		}
 
-		// Translate progress events into a status line. Ignore thinking and
-		// tool events entirely - they carry no user-facing final output.
+		// Translate progress events into a status line + optional trace
+		// dispatch. The status line tracks the agent's high-level phase
+		// (Analyzing, Running...) while the trace dispatch records each
+		// thought delta or tool lifecycle step.
 		status := ""
+		var trace *insightTraceDispatch
 		switch event.Type {
 		case "phase_update":
 			status = strings.TrimSpace(event.Message)
 			if status == "" {
 				status = humanizePhase(event.Phase)
 			}
+		case "agent_thought", "reasoning":
+			trace = &insightTraceDispatch{
+				kind:            "thought",
+				iteration:       event.Iteration,
+				thoughtDelta:    event.Content,
+				thoughtComplete: event.IsComplete,
+			}
+		case "tool_call_announced":
+			trace = &insightTraceDispatch{
+				kind: "step",
+				step: chat.TraceStep{
+					Kind:       chat.TraceToolCall,
+					ToolCallID: event.ToolCallID,
+					Title:      firstNonEmpty(event.ToolDisplayName, event.ToolName, "Tool call"),
+					Iteration:  event.Iteration,
+				},
+			}
+		case "tool_output":
+			if event.PrivateOutput {
+				break
+			}
+			trace = &insightTraceDispatch{
+				kind:        "output",
+				toolCallID:  event.ToolCallID,
+				toolContent: event.Content,
+			}
+		case "tool_call_complete":
+			trace = &insightTraceDispatch{
+				kind:        "complete",
+				toolCallID:  event.ToolCallID,
+				toolContent: event.ResultPreview,
+				toolStatus:  event.Status,
+				toolMS:      event.DurationMS,
+			}
 		}
 
 		return insightChunkMsg{
 			chatID:    event.ChatID,
 			requestID: event.RequestID,
-			phase:     event.Phase,
 			status:    status,
+			trace:     trace,
 			done:      event.Done,
 		}
+	}
+}
+
+// applyTraceDispatch routes a parsed SSE trace event to the chat model.
+// Splitting this out keeps the Update switch readable and makes it easy
+// to extend with new trace kinds.
+func (m *Model) applyTraceDispatch(d *insightTraceDispatch) {
+	if d == nil {
+		return
+	}
+	switch d.kind {
+	case "thought":
+		m.chat.MergeStreamThoughtDelta(d.iteration, d.thoughtDelta, d.thoughtComplete)
+	case "step":
+		m.chat.AppendStreamTrace(d.step)
+	case "output":
+		m.chat.AppendStreamToolOutputContent(d.toolCallID, d.toolContent)
+	case "complete":
+		m.chat.PairToolOutput(d.toolCallID, d.toolContent, d.toolStatus, d.toolMS)
 	}
 }
 
@@ -944,12 +1148,26 @@ func (m *Model) applyWorkspace(workspace *api.UnifiedWorkspace) {
 	}
 }
 
+// closeStream closes the SSE subscription without cancelling the parent
+// ctx. Use this when SSE has reached its terminal state (complete / error)
+// but the HTTP POST may still be in flight delivering the final answer.
 func (m *Model) closeStream() {
 	if m.stream == nil {
 		return
 	}
 	_ = m.stream.Close()
 	m.stream = nil
+}
+
+// cancelInsight tears down both the SSE subscription and the in-flight
+// HTTP POST. Use this on user-initiated paths (Clear, switch workspace,
+// session expiry, quit) where any pending answer should be discarded.
+func (m *Model) cancelInsight() {
+	if m.insightCancel != nil {
+		m.insightCancel()
+		m.insightCancel = nil
+	}
+	m.closeStream()
 }
 
 // resetInsightState clears per-request buffers and coordination flags. Call
@@ -960,6 +1178,9 @@ func (m *Model) resetInsightState() {
 	m.pendingRequestID = ""
 	m.httpReceived = false
 	m.sseComplete = false
+	// Drop the cancel reference; the request has terminated (success or
+	// failure) and any later teardown should be a no-op.
+	m.insightCancel = nil
 }
 
 // tryFinalizeInsight renders the final assistant message once BOTH the HTTP
@@ -977,7 +1198,7 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 	if response != nil {
 		message := buildAssistantMessage(response)
 		hasContent := strings.TrimSpace(message.Content) != "" ||
-			message.Table != nil || message.Tile != nil ||
+			message.Table != nil || message.Tile != nil || message.Chart != nil ||
 			message.EmptyData || message.ChartType != ""
 		if hasContent {
 			m.chat.ReplaceLastAssistant([]chat.Message{message})
@@ -991,21 +1212,13 @@ func (m Model) tryFinalizeInsight() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// extractTableFromResponse pulls a table out of the HTTP response payload if
-// one is present in the raw JSON. The Data field on InsightResponse is a free
-// `any` whose shape varies, so we delegate to the existing extractor over the
-// raw map.
-func extractTableFromResponse(response *api.InsightResponse) *api.InsightTable {
+// responseTable returns the table parsed from an HTTP InsightResponse's raw
+// payload, or nil when no table is present.
+func responseTable(response *api.InsightResponse) *api.InsightTable {
 	if response == nil || response.Raw == nil {
 		return nil
 	}
-	return extractTableRaw(response.Raw)
-}
-
-// extractTableRaw is a thin local alias around api.ExtractTable so callers in
-// this file read consistently.
-func extractTableRaw(raw map[string]any) *api.InsightTable {
-	return api.ExtractTable(raw)
+	return api.ExtractTable(response.Raw)
 }
 
 // buildAssistantMessage converts an InsightResponse into a chat.Message,
@@ -1033,7 +1246,7 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 			message.Table = toChatTable(table)
 		} else {
 			// Fall back to legacy {columns, rows} extractor.
-			if legacy := extractTableFromResponse(response); legacy != nil {
+			if legacy := responseTable(response); legacy != nil {
 				message.Table = toChatTable(legacy)
 			} else {
 				message.EmptyData = true
@@ -1053,10 +1266,26 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 		}
 
 	default:
-		// Other chart types (bar/line/pie/scatter/area/radar) render
-		// with just the narrative + a chart-type badge. The legacy
-		// extractor still has a chance for ad-hoc table payloads.
-		if legacy := extractTableFromResponse(response); legacy != nil {
+		// Bar and pie render via the charts package. Line, area,
+		// scatter, radar, and any unknown types fall through to the
+		// chart-type badge added by the chat renderer. The legacy
+		// extractor stays in play as a final fallback so ad-hoc
+		// table-shaped payloads remain visible.
+		if charts.IsSupported(chartType) {
+			table := api.BuildDataRowsTable(response.RawDataJSON)
+			if table == nil {
+				table = responseTable(response)
+			}
+			if table != nil {
+				message.Chart = &chat.Chart{
+					Type:   chartType,
+					Table:  table,
+					Config: response.Chart(),
+				}
+			} else {
+				message.EmptyData = true
+			}
+		} else if legacy := responseTable(response); legacy != nil {
 			message.Table = toChatTable(legacy)
 		}
 	}
@@ -1073,12 +1302,6 @@ func sessionExpiredFromError(err error) (tea.Msg, bool) {
 		return nil, false
 	}
 	if errors.Is(err, auth.ErrSessionExpired) {
-		return sessionExpiredMsg{reason: "Your session expired. Please sign in again."}, true
-	}
-	// The api client wraps bearer-load errors. Match on the sentinel by
-	// string as a fallback since some error chains unwrap through fmt.Errorf
-	// with %v rather than %w.
-	if strings.Contains(err.Error(), auth.ErrSessionExpired.Error()) {
 		return sessionExpiredMsg{reason: "Your session expired. Please sign in again."}, true
 	}
 	return nil, false
