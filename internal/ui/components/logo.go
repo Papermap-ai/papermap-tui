@@ -162,14 +162,17 @@ func letterR() string {
 }
 
 func letterM() string {
-	// ▄▄ ▄▄
-	// █▀█▀█
-	// ▀ ▀ ▀
+	// ▄▀▀▄▀▀▄
+	// █  █  █
+	// ▀  ▀  ▀
+	// Top row uses ▀ (upper-half) to align with the visual top of the
+	// neighboring letters; the corners use ▄ to match the rounded
+	// lowercase style of letterP / letterA.
 	return join(
+		"█\n█\n▀",
+		"▀▀\n  \n  ",
 		"▄\n█\n▀",
-		"▄\n▀\n ",
-		" \n█\n▀",
-		"▄\n▀\n ",
+		"▀▀\n  \n  ",
 		"▄\n█\n▀",
 	)
 }
