@@ -24,7 +24,7 @@ func newSplashSpinner(th theme.Theme) spinner.Model {
 func (m Model) splashView() string {
 	logoStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#FFFFFF"))
+		Foreground(m.theme.SplashLogo)
 	logo := logoStyle.Render("Papermap")
 	line := logo + " " + m.spinner.View()
 	return line

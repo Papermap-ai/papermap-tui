@@ -32,13 +32,13 @@ func (d ConfirmDialog) View(th theme.Theme, screenWidth int) string {
 	}
 
 	selectedBtn := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#11111B")).
+		Foreground(th.InputBg).
 		Background(th.LogoColorA).
 		Bold(true).
 		Padding(0, 3)
 	unselectedBtn := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#F2F5F4")).
-		Background(lipgloss.Color("#2A2A35")).
+		Foreground(th.TextColor).
+		Background(th.ButtonBgInactive).
 		Padding(0, 3)
 
 	var yesBtn, noBtn string

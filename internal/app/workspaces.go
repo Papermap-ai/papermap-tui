@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/config"
@@ -124,29 +123,5 @@ func (m Model) switchWorkspace(entry config.WorkspaceEntry) Model {
 // overlayWorkspacePicker composites the picker modal centered on the chat
 // view, mirroring the quit dialog overlay behavior.
 func (m Model) overlayWorkspacePicker(base string) string {
-	overlay := m.workspace.View(m.theme, m.width)
-
-	baseW := lipgloss.Width(base)
-	baseH := lipgloss.Height(base)
-	if baseW <= 0 && m.width > 0 {
-		baseW = m.width
-	}
-	if baseH <= 0 && m.height > 0 {
-		baseH = m.height
-	}
-
-	ow := lipgloss.Width(overlay)
-	oh := lipgloss.Height(overlay)
-	x := (baseW - ow) / 2
-	y := (baseH - oh) / 2
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
-
-	baseLayer := lipgloss.NewLayer(base).Z(0)
-	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
-	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
+	return m.centerOverlay(base, m.workspace.View(m.theme, m.width))
 }
