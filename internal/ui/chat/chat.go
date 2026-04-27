@@ -857,9 +857,10 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 	parts := []string{roleStyle.Render(strings.ToUpper(message.Role))}
 
 	// Trace renders right after the role label so the reasoning timeline
-	// reads as supporting context above the actual answer body.
+	// reads as supporting context above the actual answer body. A blank
+	// line follows so the answer visually detaches from the trace.
 	if trace := renderTrace(th, width, message, showThinking); trace != "" {
-		parts = append(parts, trace)
+		parts = append(parts, trace, "")
 	}
 
 	// Tile renders next so the headline metric is the first thing the
@@ -875,6 +876,14 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	if body != "" {
 		parts = append(parts, body)
+	}
+
+	// A blank line between the narrative body and any data visualization
+	// (chart, table, badge) so dense visuals do not crowd the prose above.
+	hasVisual := message.EmptyData || message.Table != nil ||
+		message.Chart != nil || (message.ChartType != "" && message.Tile == nil)
+	if body != "" && hasVisual {
+		parts = append(parts, "")
 	}
 
 	switch {
