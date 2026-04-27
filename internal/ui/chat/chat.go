@@ -498,6 +498,83 @@ func (m Model) ChatID() string {
 	return m.chatID
 }
 
+// TextareaIsEmpty reports whether the prompt textarea has no user input.
+// The parent app uses this to decide whether keys like "/" should open
+// the command palette or be passed through to the textarea as a literal
+// character.
+func (m Model) TextareaIsEmpty() bool {
+	return strings.TrimSpace(m.textarea.Value()) == ""
+}
+
+// IsStreaming reports whether an insight request is currently in flight.
+// The parent uses this to suppress overlay openers while streaming so
+// the user does not lose mid-stream context.
+func (m Model) IsStreaming() bool {
+	return m.streaming
+}
+
+// LoadConversation replaces the transcript with messages from a previously
+// saved chat and binds chatID so the next prompt threads onto the same
+// backend chat. Resets streaming state and the textarea so the user lands
+// in a clean prompt-ready view. Pass an empty messages slice to swap to
+// an existing chat with no prior turns.
+func (m *Model) LoadConversation(chatID string, messages []Message) {
+	m.textarea.Reset()
+	m.streaming = false
+	m.streamStatus = ""
+	m.err = ""
+	m.activeResponse = -1
+	m.userScrolled = false
+	m.chatID = strings.TrimSpace(chatID)
+	m.requestID = ""
+	if len(messages) == 0 {
+		m.messages = nil
+	} else {
+		m.messages = append([]Message(nil), messages...)
+	}
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// UpdateMessageVisuals merges chart/table/tile payload fields from src
+// into the message at idx. Used by the parent app to backfill saved
+// chart data after a conversation loads with text-only stubs. The
+// existing message's Role, Pending flag, and reasoning Trace are
+// preserved; Content is overwritten only when src.Content is non-empty
+// so the saved text_response wins over an empty backfill.
+func (m *Model) UpdateMessageVisuals(idx int, src Message) {
+	if idx < 0 || idx >= len(m.messages) {
+		return
+	}
+	target := &m.messages[idx]
+	if strings.TrimSpace(src.Content) != "" {
+		target.Content = src.Content
+	}
+	if src.Table != nil {
+		target.Table = src.Table
+	}
+	if src.Tile != nil {
+		target.Tile = src.Tile
+	}
+	if src.Chart != nil {
+		target.Chart = src.Chart
+	}
+	if strings.TrimSpace(src.ChartType) != "" {
+		target.ChartType = src.ChartType
+	}
+	if src.EmptyData {
+		target.EmptyData = true
+	}
+	m.syncViewportContent()
+}
+
+// MessageCount reports the number of transcript messages. Used by the
+// parent app to validate indices before calling UpdateMessageVisuals.
+func (m Model) MessageCount() int {
+	return len(m.messages)
+}
+
 // ViewportYOffset returns the transcript viewport's current vertical scroll
 // position. Useful for tests and callers that need to inspect scroll state.
 func (m Model) ViewportYOffset() int {
@@ -554,7 +631,7 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 		panelWidth,
 		lipgloss.Center,
 		th.KeyHint.Render(
-			"enter: submit  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+			"/ : commands  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
 		),
 	)
 
@@ -744,7 +821,7 @@ func thinkingHint(showThinking bool) string {
 	if showThinking {
 		state = "on"
 	}
-	return "enter: submit  ·  ctrl+t: thinking [" + state + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
+	return "/ : commands  ·  ctrl+t: thinking [" + state + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
 }
 
 func clampWidth(width int, fallback int) int {

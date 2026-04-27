@@ -35,6 +35,28 @@ func (m Model) SeedChatForTest(width, height int, messages ...chat.Message) Mode
 	return m
 }
 
+// SetAuthenticatedForTest marks the model as authenticated so tests can
+// exercise authenticated-only key paths without going through the
+// startup credential flow.
+func (m Model) SetAuthenticatedForTest() Model {
+	m.authenticated = true
+	return m
+}
+
+// ScreenName returns the current screen as a string for test assertions.
+func (m Model) ScreenName() string {
+	return string(m.screen)
+}
+
+// ScreenCommandPalette is the screen identifier for the palette overlay.
+const ScreenCommandPalette = string(screenCommandPalette)
+
+// ScreenConversations is the screen identifier for the conversations overlay.
+const ScreenConversations = string(screenConversations)
+
+// ScreenChat is the screen identifier for the main chat surface.
+const ScreenChat = string(screenChat)
+
 func findStartupMsg(cmd tea.Cmd) (tea.Msg, bool) {
 	if cmd == nil {
 		return nil, false

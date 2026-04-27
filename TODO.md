@@ -18,7 +18,8 @@
 - [x] Figure out how to display the content as it streams, particularly the thinking process.
 - [x] Add rendering of the different types of charts
 - [x] Whiles the streaming is happening if you hide the thinking it should respect it whiles it's streaming the current content
-- [ ] Add an ability to view previous chat history also
+- [x] Add an ability to view previous chat history also
+- [ ] Add an ability to cancel requests when the thinknig is happening.
 - [ ] Add an ability to change the model that the user is working with on papermap
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Figure out how to run shell commands in the chat
