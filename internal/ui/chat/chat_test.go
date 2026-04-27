@@ -259,3 +259,37 @@ func TestChatThinkingTogglePersistsAcrossMessages(t *testing.T) {
 		t.Fatalf("expected first tool visible again after toggle on, got %q", view)
 	}
 }
+
+// TestCtrlLClearsTextarea verifies that ctrl+l wipes the entire prompt
+// input. ctrl+l is the canonical "clear" key documented in
+// internal/ui/AGENTS.md. Plain backspace is left to the textarea
+// defaults so it still deletes a single character.
+func TestCtrlLClearsTextarea(t *testing.T) {
+	t.Parallel()
+
+	th := theme.Default()
+	model := sizeModel(t, chat.NewModel(th))
+	model = typeKeys(model, "h", "e", "l", "l", "o")
+
+	if got := model.TextareaValue(); got != "hello" {
+		t.Fatalf("textarea before ctrl+l: got %q want %q", got, "hello")
+	}
+
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'l', Mod: tea.ModCtrl}))
+	model = updated
+
+	if got := model.TextareaValue(); got != "" {
+		t.Fatalf("textarea after ctrl+l: got %q want empty", got)
+	}
+
+	// Sanity: plain backspace still deletes one character, not all.
+	model = typeKeys(model, "a", "b", "c")
+	if got := model.TextareaValue(); got != "abc" {
+		t.Fatalf("textarea after retyping: got %q want %q", got, "abc")
+	}
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	model = updated
+	if got := model.TextareaValue(); got != "ab" {
+		t.Fatalf("textarea after plain backspace: got %q want %q", got, "ab")
+	}
+}

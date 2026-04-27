@@ -226,10 +226,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			m.userScrolled = false
 			return m, nil
-		case "ctrl+u":
-			m.viewport.HalfPageUp()
-			m.noteUserScroll()
-			return m, nil
 		case "ctrl+d":
 			m.viewport.HalfPageDown()
 			m.noteUserScroll()
@@ -238,6 +234,21 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		if key == "ctrl+t" {
 			m.showThinking = !m.showThinking
+			m.syncViewportContent()
+			return m, nil
+		}
+
+		// Ctrl+L wipes the entire prompt textarea so the user can
+		// quickly reset their input. This is the canonical "clear" key
+		// in terminal UIs and is documented in internal/ui/AGENTS.md
+		// as the chat clear binding. It works through every common
+		// terminal + tmux config (no kitty/CSI-u protocol required),
+		// unlike Cmd/Super+Backspace which is silently dropped by
+		// older terminals and tmux without extended-keys.
+		if key == "ctrl+l" {
+			m.textarea.Reset()
+			m.err = ""
+			m.updateViewportDimensions()
 			m.syncViewportContent()
 			return m, nil
 		}
