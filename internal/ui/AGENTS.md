@@ -69,8 +69,11 @@ Default bindings:
 
 - `Enter` submit or confirm.
 - `Tab` switch focus in forms.
+- `/` open the chat command palette (only when the textarea is empty).
+- `Ctrl+P` open the conversations history overlay.
 - `Ctrl+W` switch workspace.
 - `Ctrl+T` toggle assistant thinking traces (show/hide all).
+- `Ctrl+L` clear / start a new chat session.
 - `Ctrl+C` quit.
 - `Esc` cancel or close an open picker / overlay.
 

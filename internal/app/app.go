@@ -17,8 +17,10 @@ import (
 	"github.com/papermap/papermap-tui/internal/config"
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
+	"github.com/papermap/papermap-tui/internal/ui/chat/conversations"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/components/charts"
+	"github.com/papermap/papermap-tui/internal/ui/components/palette"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
 )
@@ -30,6 +32,8 @@ const (
 	screenLanding         screen = "landing"
 	screenChat            screen = "chat"
 	screenWorkspacePicker screen = "workspace_picker"
+	screenCommandPalette  screen = "command_palette"
+	screenConversations   screen = "conversations"
 )
 
 // Minimum terminal dimensions required for the UI to render correctly.
@@ -149,6 +153,8 @@ type Model struct {
 	landing          landing.Model
 	chat             chat.Model
 	workspace        workspace.Model
+	palette          palette.Model
+	conversations    conversations.Model
 	store            *auth.TokenStore
 	spinner          spinner.Model
 	confirmQuit      bool
@@ -193,6 +199,8 @@ func NewModel() (Model, error) {
 		landing:       landing.NewModel(),
 		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
+		palette:       palette.NewModel(),
+		conversations: conversations.NewModel(),
 		workspaces:    cache.Workspaces,
 		workspacesAt:  cache.UpdatedAt,
 		store:         store,
@@ -222,6 +230,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWorkspaceCancel(), nil
 	case workspaceLoadedMsg:
 		return m.handleWorkspaceLoaded(msg), nil
+	case chatHistoryLoadedMsg:
+		return m.handleChatHistoryLoaded(msg)
+	case conversationsLoadedMsg:
+		return m.handleConversationsLoaded(msg)
+	case chartBackfilledMsg:
+		return m.handleChartBackfilled(msg)
+	case palette.SelectMsg:
+		cmd := m.dispatchPaletteCommand(msg.Command)
+		return m, cmd
+	case palette.CancelMsg:
+		m.screen = screenChat
+		return m, nil
+	case conversations.OpenChatMsg:
+		// Show the conversations panel in a loading state while the
+		// page-1 fetch runs so the user sees feedback. The handler
+		// flips back to chat on success.
+		m.conversations.Reset()
+		return m, m.fetchConversations(msg.Chat)
+	case conversations.LoadMoreMsg:
+		return m, m.fetchChatHistory(m.conversations.Page() + 1)
+	case conversations.CancelMsg:
+		m.screen = screenChat
+		return m, nil
 	case chat.SubmitMsg:
 		// Clear startup errors once the user is actively chatting.
 		m.startupErr = nil
@@ -453,6 +484,18 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.screen == screenCommandPalette {
+		updated, cmd := m.palette.Update(msg)
+		m.palette = updated
+		return m, cmd
+	}
+
+	if m.screen == screenConversations {
+		updated, cmd := m.conversations.Update(msg)
+		m.conversations = updated
+		return m, cmd
+	}
+
 	if m.screen == screenWorkspacePicker {
 		updatedPicker, cmd := m.workspace.Update(msg)
 		m.workspace = updatedPicker
@@ -463,6 +506,24 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Unauthenticated landing is a terminal screen; any key quits so
 		// the user can run `papermap auth login`.
 		return m, tea.Quit
+	}
+
+	// Intercept palette and conversations openers BEFORE delegating to
+	// chat.Update so the textarea does not consume them. "/" is only an
+	// opener when the textarea is empty; otherwise it falls through to
+	// be typed as a literal character. ctrl+p is always an opener.
+	if m.screen == screenChat && m.authenticated {
+		switch msg.String() {
+		case keyCommandPalette:
+			if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() {
+				m.openCommandPalette()
+				return m, nil
+			}
+		case keyConversations:
+			if !m.chat.IsStreaming() {
+				return m, m.openConversations()
+			}
+		}
 	}
 
 	if m.screen == screenChat {
@@ -513,6 +574,14 @@ func (m Model) View() tea.View {
 
 	if m.screen == screenWorkspacePicker {
 		base = m.overlayWorkspacePicker(base)
+	}
+
+	if m.screen == screenCommandPalette {
+		base = m.overlayCommandPalette(base)
+	}
+
+	if m.screen == screenConversations {
+		base = m.overlayConversations(base)
 	}
 
 	if m.confirmQuit {
@@ -660,7 +729,8 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 }
 
 func (m Model) handleEscape() Model {
-	if m.screen == screenWorkspacePicker {
+	switch m.screen {
+	case screenWorkspacePicker, screenCommandPalette, screenConversations:
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
@@ -683,7 +753,7 @@ func (m Model) viewScreen() string {
 	switch m.screen {
 	case screenSplash:
 		return m.splashView()
-	case screenChat, screenWorkspacePicker:
+	case screenChat, screenWorkspacePicker, screenCommandPalette, screenConversations:
 		return m.chat.View(m.theme, m.workspaceName, m.width)
 	default:
 		return m.landing.View(m.theme, m.width, m.landingMessage)
@@ -696,8 +766,12 @@ func (m Model) frame(content string) string {
 		return styled
 	}
 
-	// For chat screen, don't center - just return styled content to prevent clipping.
-	if m.screen == screenChat {
+	// For chat-derived screens (chat + overlays), don't center - just
+	// return styled content to prevent clipping.
+	if m.screen == screenChat ||
+		m.screen == screenWorkspacePicker ||
+		m.screen == screenCommandPalette ||
+		m.screen == screenConversations {
 		return styled
 	}
 
