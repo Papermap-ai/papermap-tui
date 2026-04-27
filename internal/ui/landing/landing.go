@@ -51,7 +51,7 @@ func (Model) View(th theme.Theme, width int, message string) string {
 	tagline := lipgloss.PlaceHorizontal(
 		panelWidth,
 		lipgloss.Center,
-		th.Muted.Render("Focused terminal access to Papermap insights."),
+		th.Muted.Render("Focused terminal access to Papermap Data Platform."),
 	)
 
 	return strings.Join([]string{

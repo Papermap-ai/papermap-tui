@@ -24,7 +24,7 @@ var (
 	date    = "unknown"
 )
 
-const usage = `Papermap - terminal UI for Papermap insights
+const usage = `Papermap - terminal UI for Papermap Data Platform 
 
 Usage:
   papermap [flags]            Launch the interactive TUI
