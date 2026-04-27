@@ -3,6 +3,7 @@ package app
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 )
 
@@ -46,6 +47,31 @@ func (m Model) SetAuthenticatedForTest() Model {
 // ScreenName returns the current screen as a string for test assertions.
 func (m Model) ScreenName() string {
 	return string(m.screen)
+}
+
+// SetStreamingForTest forces the model into the in-flight insight state
+// without driving the full SubmitMsg/HTTP/SSE pipeline. Used to exercise
+// the user-initiated cancel path. The chat textarea is reset so the test
+// can later assert the restored prompt.
+func (m Model) SetStreamingForTest(prompt string, requestID string, client *api.Client) Model {
+	m.client = client
+	m.pendingRequestID = requestID
+	m.chat.AppendTestMessages(
+		chat.Message{Role: "you", Content: prompt},
+		chat.Message{Role: "alan", Pending: true},
+	)
+	m.chat.MarkStreamingForTest()
+	return m
+}
+
+// PendingRequestID exposes the in-flight request id for tests.
+func (m Model) PendingRequestID() string {
+	return m.pendingRequestID
+}
+
+// CancelNotice exposes any transient cancel notice for tests.
+func (m Model) CancelNotice() string {
+	return m.cancelNotice
 }
 
 // ScreenCommandPalette is the screen identifier for the palette overlay.

@@ -54,6 +54,12 @@ type Message struct {
 	// case so users see the response landed but had nothing to display.
 	EmptyData bool
 	Pending   bool
+	// Error, when non-empty, marks the message as a failed or cancelled
+	// assistant turn. The renderer replaces the body with a pink ERROR
+	// badge followed by this text and suppresses the role label, trace,
+	// and any chart/table/tile content. Used for both user-initiated
+	// cancels and stream failures so both render the same way inline.
+	Error string
 	// Trace holds Alan's reasoning timeline (thoughts and tool calls)
 	// streamed alongside the final answer. Rendered above the body so
 	// the trace reads as supporting context.
@@ -417,14 +423,14 @@ func (m *Model) CompleteStream() {
 func (m *Model) FailStream(err string) {
 	m.streaming = false
 	m.streamStatus = ""
-	m.err = strings.TrimSpace(err)
+	trimmed := strings.TrimSpace(err)
+	if trimmed == "" {
+		trimmed = "Request failed."
+	}
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
-		if strings.TrimSpace(m.messages[m.activeResponse].Content) == "" {
-			m.messages[m.activeResponse].Content = "Request failed."
-		}
-		m.messages[m.activeResponse].Pending = false
-		if len(m.messages[m.activeResponse].Trace) > 0 {
-			m.messages[m.activeResponse].TraceComplete = true
+		m.messages[m.activeResponse] = Message{
+			Role:  "alan",
+			Error: trimmed,
 		}
 	}
 	m.activeResponse = -1
@@ -494,6 +500,41 @@ func (m *Model) Clear() {
 	m.scrollToBottom()
 }
 
+// CancelStream tears down the active streaming slot in response to a
+// user-initiated cancel. The originating user prompt stays in the
+// transcript; the pending assistant placeholder is converted into an
+// inline error message ("request cancelled") so the user sees the turn
+// ended deliberately. Streaming flags are cleared but the textarea is
+// left untouched so the user keeps whatever they were typing next.
+func (m *Model) CancelStream() {
+	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
+		m.messages[m.activeResponse] = Message{
+			Role:  "alan",
+			Error: "request cancelled",
+		}
+	}
+	m.streaming = false
+	m.streamStatus = ""
+	m.activeResponse = -1
+	m.requestID = ""
+	m.textarea.Focus()
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// LastUserPrompt returns the content of the most recent user message
+// in the transcript, or empty string if none exists. Retained as a
+// small introspection helper used by tests.
+func (m Model) LastUserPrompt() string {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "you" {
+			return m.messages[i].Content
+		}
+	}
+	return ""
+}
+
 func (m Model) ChatID() string {
 	return m.chatID
 }
@@ -504,6 +545,12 @@ func (m Model) ChatID() string {
 // character.
 func (m Model) TextareaIsEmpty() bool {
 	return strings.TrimSpace(m.textarea.Value()) == ""
+}
+
+// TextareaValue returns the current contents of the prompt textarea.
+// Used by tests that need to assert on restored prompts after cancel.
+func (m Model) TextareaValue() string {
+	return m.textarea.Value()
 }
 
 // IsStreaming reports whether an insight request is currently in flight.
@@ -598,6 +645,17 @@ func (m *Model) AppendTestMessages(messages ...Message) {
 	m.syncViewportContent()
 }
 
+// MarkStreamingForTest flips the streaming flag and points
+// activeResponse at the last message in the transcript so CancelStream
+// can find the pending assistant slot. Test-only seam used by the
+// cancel-path tests to simulate an in-flight request.
+func (m *Model) MarkStreamingForTest() {
+	m.streaming = true
+	if len(m.messages) > 0 {
+		m.activeResponse = len(m.messages) - 1
+	}
+}
+
 func (m Model) View(th theme.Theme, workspace string, width int) string {
 	if workspace == "" {
 		workspace = "Unified Workspace"
@@ -674,7 +732,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
 
 	// Key hints.
-	hints := th.KeyHint.Render(thinkingHint(m.showThinking))
+	hints := th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 
 	// Input area.
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
@@ -749,6 +807,16 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 }
 
 func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string, showThinking bool) string {
+	// Failed/cancelled turns render as a compact ERROR badge + message,
+	// no role label, no trace, no chart/table/tile, with a red bar so
+	// the failure stands out at a glance.
+	if strings.TrimSpace(message.Error) != "" {
+		badge := th.ErrorBadge.Render("ERROR")
+		body := th.Body.Render(strings.TrimSpace(message.Error))
+		line := lipgloss.JoinHorizontal(lipgloss.Top, badge, "  ", body)
+		return addLeftBar(th.Error, line)
+	}
+
 	roleStyle := th.Accent
 	barColor := th.Accent
 	if message.Role == "you" {
@@ -815,13 +883,20 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 // thinkingHint returns the active-view bottom hint string with the
 // current thinking-trace visibility state appended so the keybinding's
-// effect is obvious without an experiment.
-func thinkingHint(showThinking bool) string {
-	state := "off"
-	if showThinking {
-		state = "on"
+// effect is obvious without an experiment. While streaming, the hint
+// surfaces the cancel binding instead of the static command list.
+func thinkingHint(showThinking bool, streaming bool) string {
+	if streaming {
+		return "esc: cancel  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+c: quit"
 	}
-	return "/ : commands  ·  ctrl+t: thinking [" + state + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
+	return "/ : commands  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 func clampWidth(width int, fallback int) int {
@@ -867,7 +942,7 @@ func (m *Model) updateViewportDimensions() {
 	headerHeight := lipgloss.Height(header)
 
 	// Calculate hints height.
-	hints := m.theme.KeyHint.Render(thinkingHint(m.showThinking))
+	hints := m.theme.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 	hintsHeight := lipgloss.Height(hints)
 
 	// Calculate input height.
