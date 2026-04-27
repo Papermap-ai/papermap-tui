@@ -19,6 +19,9 @@ type Theme struct {
 	Muted      lipgloss.Style
 	KeyHint    lipgloss.Style
 	Error      lipgloss.Style
+	// ErrorBadge renders a compact pink "ERROR" pill placed inline in
+	// the chat transcript when an assistant turn fails or is cancelled.
+	ErrorBadge lipgloss.Style
 	Accent     lipgloss.Style
 	// InputAccent is a softer accent reserved for the prompt input bar so
 	// it reads as distinct from assistant message accents.
@@ -66,6 +69,11 @@ func Default() Theme {
 			Foreground(muted),
 		Error: lipgloss.NewStyle().
 			Foreground(errorColor),
+		ErrorBadge: lipgloss.NewStyle().
+			Foreground(text).
+			Background(errorColor).
+			Bold(true).
+			Padding(0, 1),
 		Accent: lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true),

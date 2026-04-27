@@ -274,6 +274,51 @@ func GenerateRequestID() string {
 	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
 }
 
+// CancelInsightRequest tells the backend to abort a running insight
+// agent run identified by RequestID. Reason is forwarded for telemetry;
+// callers should pass "user_cancelled" for explicit user-initiated stops.
+type CancelInsightRequest struct {
+	RequestID string `json:"request_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// CancelInsightResponse is the unwrapped data payload returned by
+// /api/v1/analytics/charts/cancel. The wrapping {message, success, data}
+// envelope is unwrapped by decodeJSONResponse before this struct is
+// populated, so it carries only the inner fields.
+type CancelInsightResponse struct {
+	RequestID string `json:"request_id"`
+	ChatID    string `json:"chat_id"`
+	Status    string `json:"status"`
+}
+
+// CancelInsight asks the backend to terminate an in-flight agent run.
+// This complements client-side context cancellation: cancelling ctx tears
+// down the local HTTP/SSE connections, but the backend keeps working
+// unless this endpoint is hit. Callers should pass a fresh background
+// context (the original request ctx is typically already cancelled).
+func (c *Client) CancelInsight(ctx context.Context, reqBody CancelInsightRequest) (CancelInsightResponse, error) {
+	if strings.TrimSpace(reqBody.RequestID) == "" {
+		return CancelInsightResponse{}, fmt.Errorf("request_id is required")
+	}
+	if strings.TrimSpace(reqBody.Reason) == "" {
+		reqBody.Reason = "user_cancelled"
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodPost, "/api/v1/analytics/charts/cancel", reqBody)
+	if err != nil {
+		return CancelInsightResponse{}, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return CancelInsightResponse{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return decodeJSONResponse[CancelInsightResponse](resp)
+}
+
 func (c *Client) StartInsight(ctx context.Context, reqBody InsightRequest) (InsightResponse, error) {
 	req, err := c.NewRequest(ctx, http.MethodPost, "/api/v1/analytics/charts/stream", reqBody)
 	if err != nil {

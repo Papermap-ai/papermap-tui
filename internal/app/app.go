@@ -126,6 +126,15 @@ type sessionExpiredMsg struct {
 	reason string
 }
 
+// insightCancelledMsg signals that a user-initiated cancel has finished
+// firing the backend cancel endpoint. The local stream/context teardown
+// happens synchronously when esc is handled; this message only carries
+// any backend error so the UI can surface a non-blocking notice.
+type insightCancelledMsg struct {
+	requestID string
+	err       string
+}
+
 type Model struct {
 	width            int
 	height           int
@@ -166,6 +175,11 @@ type Model struct {
 	// cancel the HTTP body: that POST is the authoritative source of the
 	// final answer and outlives the SSE complete sentinel.
 	insightCancel context.CancelFunc
+	// cancelNotice surfaces a transient warning after a user-initiated
+	// cancel when the backend cancel endpoint failed. The local cancel
+	// always succeeds; this only signals that the agent run may keep
+	// going server-side. Cleared on the next user action.
+	cancelNotice string
 }
 
 func Run() error {
@@ -267,6 +281,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleInsightChunk(msg)
 	case sessionExpiredMsg:
 		return m.handleSessionExpired(msg)
+	case insightCancelledMsg:
+		return m.handleInsightCancelled(msg)
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 	}
@@ -473,6 +489,49 @@ func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) 
 	return m, tea.Quit
 }
 
+// handleInsightCancelled processes the result of the async backend cancel
+// call. The local cancel happened synchronously when esc was pressed; this
+// only surfaces a transient notice when the backend rejected the cancel
+// so the user knows the agent run may continue server-side.
+func (m Model) handleInsightCancelled(msg insightCancelledMsg) (tea.Model, tea.Cmd) {
+	if msg.err != "" {
+		m.cancelNotice = "Cancel may not have reached the server: " + msg.err
+	}
+	return m, nil
+}
+
+// userCancelInsight performs the synchronous teardown of an in-flight
+// insight request and returns a tea.Cmd that fires the backend cancel
+// endpoint asynchronously. The originating user prompt stays in the
+// transcript and the pending assistant slot becomes an inline ERROR
+// badge so the cancellation reads as a deliberate event.
+func (m *Model) userCancelInsight() tea.Cmd {
+	requestID := strings.TrimSpace(m.pendingRequestID)
+
+	m.cancelInsight()
+	m.resetInsightState()
+	m.cancelNotice = ""
+	m.chat.CancelStream()
+
+	if requestID == "" || m.client == nil {
+		return nil
+	}
+
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := client.CancelInsight(ctx, api.CancelInsightRequest{
+			RequestID: requestID,
+			Reason:    "user_cancelled",
+		})
+		if err != nil {
+			return insightCancelledMsg{requestID: requestID, err: err.Error()}
+		}
+		return insightCancelledMsg{requestID: requestID}
+	}
+}
+
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.confirmQuit {
 		return m.updateQuitConfirm(msg)
@@ -523,6 +582,13 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if !m.chat.IsStreaming() {
 				return m, m.openConversations()
 			}
+		case keyEscape:
+			// While streaming, esc cancels the in-flight request. Keep
+			// this above the chat.Update delegation so the textarea
+			// does not see the keystroke.
+			if m.chat.IsStreaming() {
+				return m, m.userCancelInsight()
+			}
 		}
 	}
 
@@ -565,6 +631,13 @@ func (m Model) View() tea.View {
 	if m.startupErr != nil {
 		content = strings.Join([]string{
 			m.theme.Error.Render("Startup error: " + m.startupErr.Error()),
+			"",
+			content,
+		}, "\n")
+	}
+	if m.cancelNotice != "" && m.screen == screenChat {
+		content = strings.Join([]string{
+			m.theme.Muted.Render(m.cancelNotice),
 			"",
 			content,
 		}, "\n")
@@ -637,14 +710,14 @@ func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.confirmQuitYes = !m.confirmQuitYes
 		return m, nil
 	case "y", "Y":
-		return m, tea.Quit
+		return m, m.quitWithCancel()
 	case "n", "N", keyEscape:
 		m.confirmQuit = false
 		m.confirmQuitYes = false
 		return m, nil
 	case keyEnter:
 		if m.confirmQuitYes {
-			return m, tea.Quit
+			return m, m.quitWithCancel()
 		}
 		m.confirmQuit = false
 		m.confirmQuitYes = false
@@ -654,6 +727,32 @@ func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// quitWithCancel tears down any in-flight insight request and fires a
+// best-effort backend cancel before quitting. The backend call is bounded
+// by a short timeout so an unresponsive server cannot delay shutdown.
+func (m *Model) quitWithCancel() tea.Cmd {
+	requestID := strings.TrimSpace(m.pendingRequestID)
+	hasClient := m.client != nil
+	m.cancelInsight()
+	m.resetInsightState()
+
+	if requestID == "" || !hasClient {
+		return tea.Quit
+	}
+
+	client := m.client
+	cancelCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = client.CancelInsight(ctx, api.CancelInsightRequest{
+			RequestID: requestID,
+			Reason:    "user_cancelled",
+		})
+		return nil
+	}
+	return tea.Sequence(cancelCmd, tea.Quit)
 }
 
 func (m Model) loadStartup() tea.Cmd {
