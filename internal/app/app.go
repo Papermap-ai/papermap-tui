@@ -611,7 +611,8 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case keyConversations:
 			if !m.chat.IsStreaming() {
-				return m, m.openConversations()
+				cmd := m.openConversations()
+				return m, cmd
 			}
 		case keyCycleModel:
 			// TAB cycles to the next available model. Suppressed
