@@ -54,16 +54,18 @@ type Message struct {
 	// case so users see the response landed but had nothing to display.
 	EmptyData bool
 	Pending   bool
+	// Error, when non-empty, marks the message as a failed or cancelled
+	// assistant turn. The renderer replaces the body with a pink ERROR
+	// badge followed by this text and suppresses the role label, trace,
+	// and any chart/table/tile content. Used for both user-initiated
+	// cancels and stream failures so both render the same way inline.
+	Error string
 	// Trace holds Alan's reasoning timeline (thoughts and tool calls)
 	// streamed alongside the final answer. Rendered above the body so
 	// the trace reads as supporting context.
 	Trace []TraceStep
-	// TraceCollapsed controls whether a completed trace is shown as a
-	// single summary line or fully expanded. While streaming the value
-	// is ignored and the renderer shows a rolling ticker.
-	TraceCollapsed bool
-	// TraceComplete latches on once the request finishes so the renderer
-	// switches from the live ticker to the collapsible summary.
+	// TraceComplete latches once the request finishes so the renderer
+	// can switch from the live preview to the full trace.
 	TraceComplete bool
 }
 
@@ -82,11 +84,21 @@ type Model struct {
 	activeResponse int
 	theme          theme.Theme
 	lastTAHeight   int
+	// showThinking is the sticky preference for the reasoning trace
+	// display, toggled with ctrl+t. When true the renderer shows the
+	// full trace (live ticker while streaming, full timeline after
+	// completion). When false it shows a muted single-line preview
+	// while streaming and hides the trace entirely after completion.
+	showThinking bool
 	// userScrolled latches when the user moves the viewport away from
 	// the bottom (mouse wheel, page-up, etc). Streaming updates respect
 	// this flag and stop forcing the viewport to the bottom so trace
 	// inspection isn't yanked away as new chunks arrive.
 	userScrolled bool
+	// selectedModel is the display label for the active LLM model,
+	// shown as a badge pinned bottom-left inside the input box. Empty
+	// hides the badge row entirely.
+	selectedModel string
 }
 
 func NewModel(th theme.Theme) Model {
@@ -139,6 +151,7 @@ func NewModel(th theme.Theme) Model {
 		spinner:        sp,
 		activeResponse: -1,
 		theme:          th,
+		showThinking:   true,
 	}
 }
 
@@ -217,10 +230,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			m.userScrolled = false
 			return m, nil
-		case "ctrl+u":
-			m.viewport.HalfPageUp()
-			m.noteUserScroll()
-			return m, nil
 		case "ctrl+d":
 			m.viewport.HalfPageDown()
 			m.noteUserScroll()
@@ -228,9 +237,24 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 		if key == "ctrl+t" {
-			if m.ToggleAllTraces() {
-				return m, nil
-			}
+			m.showThinking = !m.showThinking
+			m.syncViewportContent()
+			return m, nil
+		}
+
+		// Ctrl+L wipes the entire prompt textarea so the user can
+		// quickly reset their input. This is the canonical "clear" key
+		// in terminal UIs and is documented in internal/ui/AGENTS.md
+		// as the chat clear binding. It works through every common
+		// terminal + tmux config (no kitty/CSI-u protocol required),
+		// unlike Cmd/Super+Backspace which is silently dropped by
+		// older terminals and tmux without extended-keys.
+		if key == "ctrl+l" {
+			m.textarea.Reset()
+			m.err = ""
+			m.updateViewportDimensions()
+			m.syncViewportContent()
+			return m, nil
 		}
 
 		// Only block submit while streaming; other input still flows.
@@ -278,6 +302,12 @@ func (m *Model) SetStreamingIDs(chatID string, requestID string) {
 	if strings.TrimSpace(requestID) != "" {
 		m.requestID = strings.TrimSpace(requestID)
 	}
+}
+
+// SetModel sets the display label for the active LLM model badge shown
+// inside the input box. Pass an empty string to hide the badge row.
+func (m *Model) SetModel(name string) {
+	m.selectedModel = strings.TrimSpace(name)
 }
 
 // SetStreamStatus sets the ephemeral status line shown alongside the spinner
@@ -377,36 +407,17 @@ func (m *Model) AppendStreamToolOutputContent(toolCallID string, content string)
 	m.scrollToBottom()
 }
 
-// ToggleAllTraces flips the collapsed/expanded state of every completed
-// assistant trace in the transcript. When any eligible trace is currently
-// expanded the press collapses everything; otherwise it expands all so a
-// single keybind reliably reveals or hides the reasoning. Returns true
-// when at least one trace was eligible.
-func (m *Model) ToggleAllTraces() bool {
-	anyExpanded := false
-	hasTrace := false
-	for _, msg := range m.messages {
-		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
-			continue
-		}
-		hasTrace = true
-		if !msg.TraceCollapsed {
-			anyExpanded = true
-		}
-	}
-	if !hasTrace {
-		return false
-	}
-	// If anything is open, close everything. Otherwise open everything.
-	collapse := anyExpanded
-	for i, msg := range m.messages {
-		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
-			continue
-		}
-		m.messages[i].TraceCollapsed = collapse
-	}
+// ToggleThinking flips the sticky reasoning-trace visibility preference.
+// Exposed so callers (tests, future menu actions) can drive the toggle
+// without going through a key event.
+func (m *Model) ToggleThinking() {
+	m.showThinking = !m.showThinking
 	m.syncViewportContent()
-	return true
+}
+
+// ShowThinking reports the current sticky reasoning-trace visibility.
+func (m Model) ShowThinking() bool {
+	return m.showThinking
 }
 
 func (m *Model) CompleteStream() {
@@ -423,10 +434,6 @@ func (m *Model) CompleteStream() {
 		m.messages[m.activeResponse].Pending = false
 		if len(m.messages[m.activeResponse].Trace) > 0 {
 			m.messages[m.activeResponse].TraceComplete = true
-			// Keep the thinking trace visible after the answer arrives
-			// so the user can read along without an extra keypress.
-			// ctrl+t hides it.
-			m.messages[m.activeResponse].TraceCollapsed = false
 		}
 	}
 	m.activeResponse = -1
@@ -437,15 +444,14 @@ func (m *Model) CompleteStream() {
 func (m *Model) FailStream(err string) {
 	m.streaming = false
 	m.streamStatus = ""
-	m.err = strings.TrimSpace(err)
+	trimmed := strings.TrimSpace(err)
+	if trimmed == "" {
+		trimmed = "Request failed."
+	}
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
-		if strings.TrimSpace(m.messages[m.activeResponse].Content) == "" {
-			m.messages[m.activeResponse].Content = "Request failed."
-		}
-		m.messages[m.activeResponse].Pending = false
-		if len(m.messages[m.activeResponse].Trace) > 0 {
-			m.messages[m.activeResponse].TraceComplete = true
-			m.messages[m.activeResponse].TraceCollapsed = false
+		m.messages[m.activeResponse] = Message{
+			Role:  "alan",
+			Error: trimmed,
 		}
 	}
 	m.activeResponse = -1
@@ -470,7 +476,7 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 	// Preserve the active assistant slot's accumulated trace so the
 	// thinking timeline survives the swap to the final answer body.
 	// The first replacement message inherits the prior trace and is
-	// marked complete so the toggle keybind treats it as eligible.
+	// marked complete so the visibility toggle treats it as eligible.
 	var carriedTrace []TraceStep
 	carryTrace := false
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
@@ -487,9 +493,6 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 		if i == 0 && carryTrace && len(message.Trace) == 0 {
 			message.Trace = carriedTrace
 			message.TraceComplete = true
-			// Keep the trace visible by default so users can read
-			// the reasoning alongside the answer. ctrl+t hides it.
-			message.TraceCollapsed = false
 		}
 		replaced = append(replaced, message)
 	}
@@ -518,8 +521,126 @@ func (m *Model) Clear() {
 	m.scrollToBottom()
 }
 
+// CancelStream tears down the active streaming slot in response to a
+// user-initiated cancel. The originating user prompt stays in the
+// transcript; the pending assistant placeholder is converted into an
+// inline error message ("request cancelled") so the user sees the turn
+// ended deliberately. Streaming flags are cleared but the textarea is
+// left untouched so the user keeps whatever they were typing next.
+func (m *Model) CancelStream() {
+	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
+		m.messages[m.activeResponse] = Message{
+			Role:  "alan",
+			Error: "request cancelled",
+		}
+	}
+	m.streaming = false
+	m.streamStatus = ""
+	m.activeResponse = -1
+	m.requestID = ""
+	m.textarea.Focus()
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// LastUserPrompt returns the content of the most recent user message
+// in the transcript, or empty string if none exists. Retained as a
+// small introspection helper used by tests.
+func (m Model) LastUserPrompt() string {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "you" {
+			return m.messages[i].Content
+		}
+	}
+	return ""
+}
+
 func (m Model) ChatID() string {
 	return m.chatID
+}
+
+// TextareaIsEmpty reports whether the prompt textarea has no user input.
+// The parent app uses this to decide whether keys like "/" should open
+// the command palette or be passed through to the textarea as a literal
+// character.
+func (m Model) TextareaIsEmpty() bool {
+	return strings.TrimSpace(m.textarea.Value()) == ""
+}
+
+// TextareaValue returns the current contents of the prompt textarea.
+// Used by tests that need to assert on restored prompts after cancel.
+func (m Model) TextareaValue() string {
+	return m.textarea.Value()
+}
+
+// IsStreaming reports whether an insight request is currently in flight.
+// The parent uses this to suppress overlay openers while streaming so
+// the user does not lose mid-stream context.
+func (m Model) IsStreaming() bool {
+	return m.streaming
+}
+
+// LoadConversation replaces the transcript with messages from a previously
+// saved chat and binds chatID so the next prompt threads onto the same
+// backend chat. Resets streaming state and the textarea so the user lands
+// in a clean prompt-ready view. Pass an empty messages slice to swap to
+// an existing chat with no prior turns.
+func (m *Model) LoadConversation(chatID string, messages []Message) {
+	m.textarea.Reset()
+	m.streaming = false
+	m.streamStatus = ""
+	m.err = ""
+	m.activeResponse = -1
+	m.userScrolled = false
+	m.chatID = strings.TrimSpace(chatID)
+	m.requestID = ""
+	if len(messages) == 0 {
+		m.messages = nil
+	} else {
+		m.messages = append([]Message(nil), messages...)
+	}
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+	m.scrollToBottom()
+}
+
+// UpdateMessageVisuals merges chart/table/tile payload fields from src
+// into the message at idx. Used by the parent app to backfill saved
+// chart data after a conversation loads with text-only stubs. The
+// existing message's Role, Pending flag, and reasoning Trace are
+// preserved; Content is overwritten only when src.Content is non-empty
+// so the saved text_response wins over an empty backfill.
+func (m *Model) UpdateMessageVisuals(idx int, src Message) {
+	if idx < 0 || idx >= len(m.messages) {
+		return
+	}
+	target := &m.messages[idx]
+	if strings.TrimSpace(src.Content) != "" {
+		target.Content = src.Content
+	}
+	if src.Table != nil {
+		target.Table = src.Table
+	}
+	if src.Tile != nil {
+		target.Tile = src.Tile
+	}
+	if src.Chart != nil {
+		target.Chart = src.Chart
+	}
+	if strings.TrimSpace(src.ChartType) != "" {
+		target.ChartType = src.ChartType
+	}
+	if src.EmptyData {
+		target.EmptyData = true
+	}
+	m.syncViewportContent()
+}
+
+// MessageCount reports the number of transcript messages. Used by the
+// parent app to validate indices before calling UpdateMessageVisuals.
+func (m Model) MessageCount() int {
+	return len(m.messages)
 }
 
 // ViewportYOffset returns the transcript viewport's current vertical scroll
@@ -545,6 +666,17 @@ func (m *Model) AppendTestMessages(messages ...Message) {
 	m.syncViewportContent()
 }
 
+// MarkStreamingForTest flips the streaming flag and points
+// activeResponse at the last message in the transcript so CancelStream
+// can find the pending assistant slot. Test-only seam used by the
+// cancel-path tests to simulate an in-flight request.
+func (m *Model) MarkStreamingForTest() {
+	m.streaming = true
+	if len(m.messages) > 0 {
+		m.activeResponse = len(m.messages) - 1
+	}
+}
+
 func (m Model) View(th theme.Theme, workspace string, width int) string {
 	if workspace == "" {
 		workspace = "Unified Workspace"
@@ -568,17 +700,15 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 	workspaceLabel := th.Title.Render("Workspace: " + workspace)
 
 	if innerWidth > 0 {
-		m.textarea.SetWidth(max(innerWidth-2, 10))
+		m.textarea.SetWidth(max(innerWidth-3, 10))
 	}
-	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.InputAccent, taView)
+	inputView := m.renderInput(th)
 
 	hints := lipgloss.PlaceHorizontal(
 		panelWidth,
 		lipgloss.Center,
 		th.KeyHint.Render(
-			"enter: submit  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+			"/ : commands  ·  tab: cycle model  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
 		),
 	)
 
@@ -621,14 +751,10 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
 
 	// Key hints.
-	hints := th.KeyHint.Render(
-		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
-	)
+	hints := th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 
 	// Input area.
-	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.InputAccent, taView)
+	inputView := m.renderInput(th)
 
 	// Assemble: header, viewport, input, error (if any), hints.
 	sections := []string{
@@ -691,13 +817,23 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 		if i == m.activeResponse && message.Pending {
 			msgStatus = status
 		}
-		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame, msgStatus))
+		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame, msgStatus, m.showThinking))
 	}
 
 	return strings.Join(blocks, "\n\n")
 }
 
-func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string) string {
+func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string, showThinking bool) string {
+	// Failed/cancelled turns render as a compact ERROR badge + message,
+	// no role label, no trace, no chart/table/tile, with a red bar so
+	// the failure stands out at a glance.
+	if strings.TrimSpace(message.Error) != "" {
+		badge := th.ErrorBadge.Render("ERROR")
+		body := th.Body.Render(strings.TrimSpace(message.Error))
+		line := lipgloss.JoinHorizontal(lipgloss.Top, badge, "  ", body)
+		return addLeftBar(th.Error, line)
+	}
+
 	roleStyle := th.Accent
 	barColor := th.Accent
 	if message.Role == "you" {
@@ -721,9 +857,10 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 	parts := []string{roleStyle.Render(strings.ToUpper(message.Role))}
 
 	// Trace renders right after the role label so the reasoning timeline
-	// reads as supporting context above the actual answer body.
-	if trace := renderTrace(th, width, message); trace != "" {
-		parts = append(parts, trace)
+	// reads as supporting context above the actual answer body. A blank
+	// line follows so the answer visually detaches from the trace.
+	if trace := renderTrace(th, width, message, showThinking); trace != "" {
+		parts = append(parts, trace, "")
 	}
 
 	// Tile renders next so the headline metric is the first thing the
@@ -739,6 +876,14 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	if body != "" {
 		parts = append(parts, body)
+	}
+
+	// A blank line between the narrative body and any data visualization
+	// (chart, table, badge) so dense visuals do not crowd the prose above.
+	hasVisual := message.EmptyData || message.Table != nil ||
+		message.Chart != nil || (message.ChartType != "" && message.Tile == nil)
+	if body != "" && hasVisual {
+		parts = append(parts, "")
 	}
 
 	switch {
@@ -760,6 +905,24 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	// Add left accent bar.
 	return addLeftBar(barColor, content)
+}
+
+// thinkingHint returns the active-view bottom hint string with the
+// current thinking-trace visibility state appended so the keybinding's
+// effect is obvious without an experiment. While streaming, the hint
+// surfaces the cancel binding instead of the static command list.
+func thinkingHint(showThinking bool, streaming bool) string {
+	if streaming {
+		return "esc: cancel  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+c: quit"
+	}
+	return "/ : commands  ·  tab: cycle model  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 func clampWidth(width int, fallback int) int {
@@ -805,16 +968,12 @@ func (m *Model) updateViewportDimensions() {
 	headerHeight := lipgloss.Height(header)
 
 	// Calculate hints height.
-	hints := m.theme.KeyHint.Render(
-		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
-	)
+	hints := m.theme.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 	hintsHeight := lipgloss.Height(hints)
 
 	// Calculate input height.
-	m.textarea.SetWidth(max(width-4-2, 10))
-	bgStyle := lipgloss.NewStyle().Background(m.theme.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(m.theme.InputAccent, taView)
+	m.textarea.SetWidth(max(width-4-2-1, 10))
+	inputView := m.renderInput(m.theme)
 	inputHeight := lipgloss.Height(inputView)
 
 	// Calculate error height if present.
@@ -849,4 +1008,86 @@ func (m *Model) syncViewportContent() {
 	contentWidth := m.width - 4
 	transcript := m.transcriptView(m.theme, contentWidth)
 	m.viewport.SetContent(transcript)
+}
+
+// renderInput composes the prompt input box: the textarea padded to its
+// configured width, optionally followed by a model badge row, prefixed
+// with the accent left bar plus an extra inner gutter so text does not
+// hug the bar. Centralized so the three render sites cannot drift; the
+// badge row attaches here so it inherits the InputBg and the continuous
+// left bar.
+func (m Model) renderInput(th theme.Theme) string {
+	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
+	width := m.textarea.Width()
+	body := m.textarea.View()
+	if badge := m.renderModelBadge(th, width); badge != "" {
+		body = body + "\n" + badge
+	}
+	// One extra left column inside the InputBg rectangle creates
+	// breathing room between the accent bar and the text content.
+	gutter := bgStyle.Render(" ")
+	body = prefixLines(body, gutter)
+	taView := padLinesToWidth(bgStyle, width+1, body)
+	return addLeftBar(th.InputAccent, taView)
+}
+
+// renderModelBadge returns the single-line "Model · <name>" badge styled
+// to sit bottom-left inside the input box. "Model" and the dot separator
+// stay muted; the model name takes the soft brand accent so it reads as
+// the live status value (mirrors patterns like "Build · Claude Opus 4.7").
+// Returns "" when no model is selected or when the available width is
+// too small to render anything meaningful.
+func (m Model) renderModelBadge(th theme.Theme, width int) string {
+	name := strings.TrimSpace(m.selectedModel)
+	if name == "" || width < 10 {
+		return ""
+	}
+	bg := th.InputBg
+	label := truncateBadge("Model", name, width)
+	muted := th.KeyHint.Background(bg)
+	accent := lipgloss.NewStyle().Foreground(th.LogoColorB).Background(bg).Bold(true)
+
+	prefix, slug, hasSlug := strings.Cut(label, "\x00")
+	if !hasSlug {
+		return muted.Render(prefix)
+	}
+	return muted.Render(prefix) + accent.Render(slug)
+}
+
+// truncateBadge composes "<prefix> · <slug>" clamped to width display
+// columns and returns it with a NUL byte separating the muted prefix
+// (label + dot + spaces) from the accent slug so the caller can paint
+// each half in its own color. When the slug must be cut, the truncated
+// slug stays in the second segment so it keeps the accent color. When
+// even the prefix alone overflows, returns just the truncated prefix
+// with no NUL separator.
+func truncateBadge(label, slug string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	prefix := label + " · "
+	full := prefix + slug
+	if lipgloss.Width(full) <= width {
+		return prefix + "\x00" + slug
+	}
+	// Slug too long: keep prefix intact, ellipsize the slug.
+	if lipgloss.Width(prefix)+1 <= width {
+		runes := []rune(slug)
+		for i := len(runes); i > 0; i-- {
+			candidate := prefix + string(runes[:i-1]) + "…"
+			if lipgloss.Width(candidate) <= width {
+				return prefix + "\x00" + string(runes[:i-1]) + "…"
+			}
+		}
+	}
+	// Even the prefix does not fit; fall back to a clipped label so the
+	// badge area is never blank.
+	runes := []rune(label)
+	for i := len(runes); i > 0; i-- {
+		candidate := string(runes[:i-1]) + "…"
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return "…"
 }

@@ -9,7 +9,7 @@ import (
 // Palette is the minimal styling surface every renderer needs. Decoupling
 // charts from theme.Theme keeps the package independently testable and
 // makes the contract explicit: charts care about series colors, axis and
-// grid foregrounds, label and muted text. Anything else is out of scope.
+// grid foregrounds, label and muted text.
 type Palette struct {
 	// Series is the rotation of foreground colors used for chart marks
 	// (bars, lines, dots). Renderers index into Series modulo len.

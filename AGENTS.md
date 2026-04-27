@@ -18,8 +18,6 @@ subcommands (`papermap auth login | logout | whoami`) outside the Bubble
 Tea program. Launching `papermap` lands directly in the unified workspace
 when a session exists, otherwise it prints a sign-in prompt and exits.
 
-The initial plan lives in `Plans/initial_plan.md`.
-
 When making architecture decisions, align with the MVP scope:
 
 - Authentication via `papermap auth` CLI subcommands (huh-based prompts).
@@ -227,7 +225,7 @@ Prefer implementation choices that keep cross-platform builds simple.
 - Comments on their own lines should start with a capital letter and end with a
   period.
 - Wrap comments near 78 columns when practical.
-- Add comments sparingly. Prefer self-explanatory code.
+- Add comments sparingly. Prefer self-explanatory code and function and variable names that are self-documenting.
 
 ## Testing Guidelines
 

@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +66,15 @@ func TestStartupWithValidCredentialsRoutesToChat(t *testing.T) {
 					"workspace_name":          "Kwabena's Unified Space",
 					"included_workspace_ids":  []string{"ws-a"},
 					"all_workspaces_included": false,
+				},
+			})
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
 				},
 			})
 		default:
@@ -124,6 +135,15 @@ func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 		case "/api/v1/analytics/workspaces/unified-123/included-workspaces":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"message":"boom"}`))
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -203,6 +223,15 @@ func TestStartupRefreshesExpiredCredentials(t *testing.T) {
 					"workspace_name":          "Kwabena's Unified Space",
 					"included_workspace_ids":  []string{"ws-a", "ws-b"},
 					"all_workspaces_included": false,
+				},
+			})
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
 				},
 			})
 		default:
@@ -298,7 +327,7 @@ func TestStartupClearsExpiredCredentialsWhenRefreshFails(t *testing.T) {
 	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Focused terminal access to Papermap insights") {
+	if !strings.Contains(view, "Focused terminal access to Papermap Data Platform") {
 		t.Fatalf("expected landing view after failed refresh, got %q", view)
 	}
 
@@ -389,6 +418,15 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 				`data: {"type":"done","request_id":"req-123","chat_id":"chat-123","done":true}`,
 				"",
 			}, "\n"))
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -509,4 +547,121 @@ func jwtForTest(expiresAt time.Time) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":` + strconv.FormatInt(expiresAt.Unix(), 10) + `}`))
 	return header + "." + payload + ".signature"
+}
+
+type stubTokenSource struct{}
+
+func (stubTokenSource) AccessToken(context.Context) (string, error) {
+	return "stub-token", nil
+}
+
+// TestEscapeWhileStreamingCancelsRequest verifies the user-cancel path:
+// pressing esc while a request is in flight tears down the local stream,
+// drops the pending placeholder + originating prompt from the transcript,
+// restores the prompt to the textarea, and fires the backend cancel
+// endpoint with the in-flight request id and the "user_cancelled" reason.
+func TestEscapeWhileStreamingCancelsRequest(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	const (
+		prompt    = "what are top metrics?"
+		requestID = "req-cancel-123"
+	)
+
+	var (
+		mu      sync.Mutex
+		hits    int
+		gotBody api.CancelInsightRequest
+		gotAuth string
+		gotPath string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		hits++
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(responseEnvelope[map[string]any]{
+			Message: "ok",
+			Success: true,
+			Data: map[string]any{
+				"request_id": requestID,
+				"chat_id":    "chat-1",
+				"status":     "cancelled",
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := api.NewClient(server.URL, server.Client(), stubTokenSource{})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	model, err := app.NewModel()
+	if err != nil {
+		t.Fatalf("NewModel returned error: %v", err)
+	}
+
+	model = model.SetAuthenticatedForTest().SeedChatForTest(80, 24)
+	model = model.SetStreamingForTest(prompt, requestID, client)
+
+	if !model.Chat().IsStreaming() {
+		t.Fatal("expected chat to be streaming after SetStreamingForTest")
+	}
+	if got := model.PendingRequestID(); got != requestID {
+		t.Fatalf("pendingRequestID before cancel: got %q want %q", got, requestID)
+	}
+	if got := model.Chat().MessageCount(); got != 2 {
+		t.Fatalf("seeded transcript: got %d messages, want 2", got)
+	}
+
+	esc := tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
+	next, cmd := model.Update(esc)
+	nextModel, ok := next.(app.Model)
+	if !ok {
+		t.Fatalf("expected app.Model after esc, got %T", next)
+	}
+
+	// Local teardown is synchronous.
+	if nextModel.Chat().IsStreaming() {
+		t.Error("expected streaming to be false after esc cancel")
+	}
+	if got := nextModel.Chat().MessageCount(); got != 2 {
+		t.Errorf("expected user prompt + inline error to remain, got %d messages", got)
+	}
+	if got := nextModel.Chat().TextareaValue(); got != "" {
+		t.Errorf("textarea after cancel should be untouched, got %q", got)
+	}
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from cancel to fire backend endpoint")
+	}
+
+	// Drain the backend cancel cmd. The handler updates `hits`, `gotBody`,
+	// `gotAuth`, and `gotPath` synchronously.
+	_ = cmd()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 1 {
+		t.Fatalf("backend cancel hits: got %d want 1", hits)
+	}
+	if !strings.HasSuffix(gotPath, "/api/v1/analytics/charts/cancel") {
+		t.Errorf("backend cancel path: got %q want suffix /api/v1/analytics/charts/cancel", gotPath)
+	}
+	if gotAuth != "Bearer stub-token" {
+		t.Errorf("backend cancel auth header: got %q want %q", gotAuth, "Bearer stub-token")
+	}
+	if gotBody.RequestID != requestID {
+		t.Errorf("backend cancel request_id: got %q want %q", gotBody.RequestID, requestID)
+	}
+	if gotBody.Reason != "user_cancelled" {
+		t.Errorf("backend cancel reason: got %q want %q", gotBody.Reason, "user_cancelled")
+	}
 }
