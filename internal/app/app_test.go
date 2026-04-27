@@ -68,6 +68,15 @@ func TestStartupWithValidCredentialsRoutesToChat(t *testing.T) {
 					"all_workspaces_included": false,
 				},
 			})
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -126,6 +135,15 @@ func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 		case "/api/v1/analytics/workspaces/unified-123/included-workspaces":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"message":"boom"}`))
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -205,6 +223,15 @@ func TestStartupRefreshesExpiredCredentials(t *testing.T) {
 					"workspace_name":          "Kwabena's Unified Space",
 					"included_workspace_ids":  []string{"ws-a", "ws-b"},
 					"all_workspaces_included": false,
+				},
+			})
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
 				},
 			})
 		default:
@@ -391,6 +418,15 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 				`data: {"type":"done","request_id":"req-123","chat_id":"chat-123","done":true}`,
 				"",
 			}, "\n"))
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}

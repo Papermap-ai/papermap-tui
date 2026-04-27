@@ -95,6 +95,10 @@ type Model struct {
 	// this flag and stop forcing the viewport to the bottom so trace
 	// inspection isn't yanked away as new chunks arrive.
 	userScrolled bool
+	// selectedModel is the display label for the active LLM model,
+	// shown as a badge pinned bottom-left inside the input box. Empty
+	// hides the badge row entirely.
+	selectedModel string
 }
 
 func NewModel(th theme.Theme) Model {
@@ -298,6 +302,12 @@ func (m *Model) SetStreamingIDs(chatID string, requestID string) {
 	if strings.TrimSpace(requestID) != "" {
 		m.requestID = strings.TrimSpace(requestID)
 	}
+}
+
+// SetModel sets the display label for the active LLM model badge shown
+// inside the input box. Pass an empty string to hide the badge row.
+func (m *Model) SetModel(name string) {
+	m.selectedModel = strings.TrimSpace(name)
 }
 
 // SetStreamStatus sets the ephemeral status line shown alongside the spinner
@@ -690,17 +700,15 @@ func (m Model) emptyView(th theme.Theme, workspace string, width int) string {
 	workspaceLabel := th.Title.Render("Workspace: " + workspace)
 
 	if innerWidth > 0 {
-		m.textarea.SetWidth(max(innerWidth-2, 10))
+		m.textarea.SetWidth(max(innerWidth-3, 10))
 	}
-	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.InputAccent, taView)
+	inputView := m.renderInput(th)
 
 	hints := lipgloss.PlaceHorizontal(
 		panelWidth,
 		lipgloss.Center,
 		th.KeyHint.Render(
-			"/ : commands  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
+			"/ : commands  ·  tab: cycle model  ·  ctrl+w: switch workspace  ·  ctrl+c: quit",
 		),
 	)
 
@@ -746,9 +754,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	hints := th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 
 	// Input area.
-	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(th.InputAccent, taView)
+	inputView := m.renderInput(th)
 
 	// Assemble: header, viewport, input, error (if any), hints.
 	sections := []string{
@@ -900,7 +906,7 @@ func thinkingHint(showThinking bool, streaming bool) string {
 	if streaming {
 		return "esc: cancel  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+c: quit"
 	}
-	return "/ : commands  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
+	return "/ : commands  ·  tab: cycle model  ·  ctrl+t: thinking [" + onOff(showThinking) + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
 }
 
 func onOff(on bool) string {
@@ -957,10 +963,8 @@ func (m *Model) updateViewportDimensions() {
 	hintsHeight := lipgloss.Height(hints)
 
 	// Calculate input height.
-	m.textarea.SetWidth(max(width-4-2, 10))
-	bgStyle := lipgloss.NewStyle().Background(m.theme.InputBg)
-	taView := padLinesToWidth(bgStyle, m.textarea.Width(), m.textarea.View())
-	inputView := addLeftBar(m.theme.InputAccent, taView)
+	m.textarea.SetWidth(max(width-4-2-1, 10))
+	inputView := m.renderInput(m.theme)
 	inputHeight := lipgloss.Height(inputView)
 
 	// Calculate error height if present.
@@ -995,4 +999,86 @@ func (m *Model) syncViewportContent() {
 	contentWidth := m.width - 4
 	transcript := m.transcriptView(m.theme, contentWidth)
 	m.viewport.SetContent(transcript)
+}
+
+// renderInput composes the prompt input box: the textarea padded to its
+// configured width, optionally followed by a model badge row, prefixed
+// with the accent left bar plus an extra inner gutter so text does not
+// hug the bar. Centralized so the three render sites cannot drift; the
+// badge row attaches here so it inherits the InputBg and the continuous
+// left bar.
+func (m Model) renderInput(th theme.Theme) string {
+	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
+	width := m.textarea.Width()
+	body := m.textarea.View()
+	if badge := m.renderModelBadge(th, width); badge != "" {
+		body = body + "\n" + badge
+	}
+	// One extra left column inside the InputBg rectangle creates
+	// breathing room between the accent bar and the text content.
+	gutter := bgStyle.Render(" ")
+	body = prefixLines(body, gutter)
+	taView := padLinesToWidth(bgStyle, width+1, body)
+	return addLeftBar(th.InputAccent, taView)
+}
+
+// renderModelBadge returns the single-line "Model · <name>" badge styled
+// to sit bottom-left inside the input box. "Model" and the dot separator
+// stay muted; the model name takes the soft brand accent so it reads as
+// the live status value (mirrors patterns like "Build · Claude Opus 4.7").
+// Returns "" when no model is selected or when the available width is
+// too small to render anything meaningful.
+func (m Model) renderModelBadge(th theme.Theme, width int) string {
+	name := strings.TrimSpace(m.selectedModel)
+	if name == "" || width < 10 {
+		return ""
+	}
+	bg := th.InputBg
+	label := truncateBadge("Model", name, width)
+	muted := th.KeyHint.Background(bg)
+	accent := lipgloss.NewStyle().Foreground(th.LogoColorB).Background(bg).Bold(true)
+
+	prefix, slug, hasSlug := strings.Cut(label, "\x00")
+	if !hasSlug {
+		return muted.Render(prefix)
+	}
+	return muted.Render(prefix) + accent.Render(slug)
+}
+
+// truncateBadge composes "<prefix> · <slug>" clamped to width display
+// columns and returns it with a NUL byte separating the muted prefix
+// (label + dot + spaces) from the accent slug so the caller can paint
+// each half in its own color. When the slug must be cut, the truncated
+// slug stays in the second segment so it keeps the accent color. When
+// even the prefix alone overflows, returns just the truncated prefix
+// with no NUL separator.
+func truncateBadge(label, slug string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	prefix := label + " · "
+	full := prefix + slug
+	if lipgloss.Width(full) <= width {
+		return prefix + "\x00" + slug
+	}
+	// Slug too long: keep prefix intact, ellipsize the slug.
+	if lipgloss.Width(prefix)+1 <= width {
+		runes := []rune(slug)
+		for i := len(runes); i > 0; i-- {
+			candidate := prefix + string(runes[:i-1]) + "…"
+			if lipgloss.Width(candidate) <= width {
+				return prefix + "\x00" + string(runes[:i-1]) + "…"
+			}
+		}
+	}
+	// Even the prefix does not fit; fall back to a clipped label so the
+	// badge area is never blank.
+	runes := []rune(label)
+	for i := len(runes); i > 0; i-- {
+		candidate := string(runes[:i-1]) + "…"
+		if lipgloss.Width(candidate) <= width {
+			return candidate
+		}
+	}
+	return "…"
 }

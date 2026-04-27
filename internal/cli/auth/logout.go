@@ -47,6 +47,7 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 			return fmt.Errorf("clear credentials: %w", err)
 		}
 		_ = config.ClearWorkspaces()
+		clearSelectedModel(cfg)
 		_, _ = fmt.Fprintln(w, "Logged out successfully.")
 		return nil
 
@@ -57,4 +58,16 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 	default:
 		return fmt.Errorf("load stored credentials: %w", err)
 	}
+}
+
+// clearSelectedModel removes any persisted model selection so a fresh
+// login starts on the backend default. Errors are intentionally swallowed
+// because logout has already succeeded; surfacing a config-write error
+// would only confuse the user.
+func clearSelectedModel(cfg config.Config) {
+	if cfg.SelectedModel == "" {
+		return
+	}
+	cfg.SelectedModel = ""
+	_ = config.Save(cfg)
 }

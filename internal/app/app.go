@@ -18,6 +18,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 	"github.com/papermap/papermap-tui/internal/ui/chat/conversations"
+	"github.com/papermap/papermap-tui/internal/ui/chat/modelpicker"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/components/charts"
 	"github.com/papermap/papermap-tui/internal/ui/components/palette"
@@ -32,6 +33,7 @@ const (
 	screenLanding         screen = "landing"
 	screenChat            screen = "chat"
 	screenWorkspacePicker screen = "workspace_picker"
+	screenModelPicker     screen = "model_picker"
 	screenCommandPalette  screen = "command_palette"
 	screenConversations   screen = "conversations"
 )
@@ -50,7 +52,13 @@ type startupMsg struct {
 	authenticated bool
 	client        *api.Client
 	workspace     *api.UnifiedWorkspace
-	err           error
+	// models carries the available LLM choices for the current user.
+	// May be nil when the fetch failed; the app falls back to a single
+	// synthetic choice based on the persisted slug or the hardcoded
+	// FallbackDefaultModel so the UI still renders.
+	models   []api.ModelChoice
+	defModel string
+	err      error
 }
 
 type workspaceLoadedMsg struct {
@@ -162,6 +170,7 @@ type Model struct {
 	landing          landing.Model
 	chat             chat.Model
 	workspace        workspace.Model
+	modelPicker      modelpicker.Model
 	palette          palette.Model
 	conversations    conversations.Model
 	store            *auth.TokenStore
@@ -180,6 +189,15 @@ type Model struct {
 	// always succeeds; this only signals that the agent run may keep
 	// going server-side. Cleared on the next user action.
 	cancelNotice string
+	// availableModels is the flattened list of LLM choices fetched at
+	// startup. Used by the model picker and TAB cycle.
+	availableModels []api.ModelChoice
+	// selectedModel is the slug currently routed on outgoing insight
+	// requests. Persisted to config.SelectedModel on change.
+	selectedModel string
+	// defaultModelSlug is the backend-recommended default. Used when
+	// the persisted SelectedModel is empty or no longer valid.
+	defaultModelSlug string
 }
 
 func Run() error {
@@ -213,6 +231,7 @@ func NewModel() (Model, error) {
 		landing:       landing.NewModel(),
 		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
+		modelPicker:   modelpicker.NewModel(),
 		palette:       palette.NewModel(),
 		conversations: conversations.NewModel(),
 		workspaces:    cache.Workspaces,
@@ -242,6 +261,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.switchWorkspace(msg.Workspace), nil
 	case workspace.CancelMsg:
 		return m.handleWorkspaceCancel(), nil
+	case modelpicker.SelectMsg:
+		return m.handleModelPickerSelect(msg), nil
+	case modelpicker.CancelMsg:
+		return m.handleModelPickerCancel(), nil
 	case workspaceLoadedMsg:
 		return m.handleWorkspaceLoaded(msg), nil
 	case chatHistoryLoadedMsg:
@@ -295,6 +318,7 @@ func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
 	m.client = msg.client
 	m.startupErr = msg.err
 	m.applyWorkspace(msg.workspace)
+	m.hydrateModels(msg.models, msg.defModel)
 	if m.authenticated {
 		if cred, err := m.store.Load(); err == nil {
 			m.user = cred.User
@@ -477,6 +501,7 @@ func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) 
 	m.user = auth.User{}
 	_ = m.store.Clear()
 	_ = config.ClearWorkspaces()
+	m.clearPersistedModel()
 	m.workspaces = nil
 	m.workspacesAt = time.Time{}
 	m.chat.Clear()
@@ -561,6 +586,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.screen == screenModelPicker {
+		updatedPicker, cmd := m.modelPicker.Update(msg)
+		m.modelPicker = updatedPicker
+		return m, cmd
+	}
+
 	if m.screen == screenLanding && !m.authenticated {
 		// Unauthenticated landing is a terminal screen; any key quits so
 		// the user can run `papermap auth login`.
@@ -581,6 +612,13 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case keyConversations:
 			if !m.chat.IsStreaming() {
 				return m, m.openConversations()
+			}
+		case keyCycleModel:
+			// TAB cycles to the next available model. Suppressed
+			// while streaming so an in-flight request keeps the
+			// model that produced it.
+			if !m.chat.IsStreaming() {
+				return m.cycleModel(), nil
 			}
 		case keyEscape:
 			// While streaming, esc cancels the in-flight request. Keep
@@ -647,6 +685,10 @@ func (m Model) View() tea.View {
 
 	if m.screen == screenWorkspacePicker {
 		base = m.overlayWorkspacePicker(base)
+	}
+
+	if m.screen == screenModelPicker {
+		base = m.overlayModelPicker(base)
 	}
 
 	if m.screen == screenCommandPalette {
@@ -781,7 +823,25 @@ func (m Model) loadStartup() tea.Cmd {
 			return startupMsg{config: cfg, authenticated: authenticated, client: client, err: err}
 		}
 
-		return startupMsg{config: cfg, authenticated: authenticated, client: client, workspace: workspace}
+		var (
+			models   []api.ModelChoice
+			defModel string
+		)
+		if authenticated {
+			if opts, optsErr := client.ListModels(context.Background()); optsErr == nil {
+				models = opts.Flatten()
+				defModel = opts.DefaultSlug()
+			}
+		}
+
+		return startupMsg{
+			config:        cfg,
+			authenticated: authenticated,
+			client:        client,
+			workspace:     workspace,
+			models:        models,
+			defModel:      defModel,
+		}
 	}
 }
 
@@ -829,7 +889,7 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 
 func (m Model) handleEscape() Model {
 	switch m.screen {
-	case screenWorkspacePicker, screenCommandPalette, screenConversations:
+	case screenWorkspacePicker, screenModelPicker, screenCommandPalette, screenConversations:
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
@@ -852,7 +912,7 @@ func (m Model) viewScreen() string {
 	switch m.screen {
 	case screenSplash:
 		return m.splashView()
-	case screenChat, screenWorkspacePicker, screenCommandPalette, screenConversations:
+	case screenChat, screenWorkspacePicker, screenModelPicker, screenCommandPalette, screenConversations:
 		return m.chat.View(m.theme, m.workspaceName, m.width)
 	default:
 		return m.landing.View(m.theme, m.width, m.landingMessage)
@@ -869,6 +929,7 @@ func (m Model) frame(content string) string {
 	// return styled content to prevent clipping.
 	if m.screen == screenChat ||
 		m.screen == screenWorkspacePicker ||
+		m.screen == screenModelPicker ||
 		m.screen == screenCommandPalette ||
 		m.screen == screenConversations {
 		return styled
@@ -949,6 +1010,7 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 			StreamExecution:         true,
 			DisplayPrompt:           msg.Prompt,
 			InteractionSource:       "user_query",
+			LLMModel:                strings.TrimSpace(m.selectedModel),
 		}
 
 		// HTTP call runs in a goroutine so its result can be picked up by a
@@ -1319,6 +1381,100 @@ func (m *Model) applyWorkspace(workspace *api.UnifiedWorkspace) {
 	if name := strings.TrimSpace(workspace.Name); name != "" {
 		m.workspaceName = name
 	}
+}
+
+// hydrateModels seeds availableModels, defaultModelSlug, and selectedModel
+// from the startup fetch. Resolution order for selectedModel:
+//   - persisted config.SelectedModel if still present in availableModels
+//   - backend recommended default (defModel)
+//   - first available slug
+//   - api.FallbackDefaultModel (with a synthetic single-entry list so the
+//     UI still renders when the options fetch failed entirely)
+func (m *Model) hydrateModels(models []api.ModelChoice, defModel string) {
+	m.availableModels = models
+	m.defaultModelSlug = strings.TrimSpace(defModel)
+
+	persisted := strings.TrimSpace(m.config.SelectedModel)
+
+	hasSlug := func(slug string) bool {
+		for _, c := range m.availableModels {
+			if c.Slug == slug {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch {
+	case persisted != "" && hasSlug(persisted):
+		m.selectedModel = persisted
+	case m.defaultModelSlug != "" && hasSlug(m.defaultModelSlug):
+		m.selectedModel = m.defaultModelSlug
+	case len(m.availableModels) > 0:
+		m.selectedModel = m.availableModels[0].Slug
+	default:
+		// Options fetch failed and we have no list. Synthesize one so
+		// the picker / badge are not empty.
+		fallback := persisted
+		if fallback == "" {
+			fallback = api.FallbackDefaultModel
+		}
+		m.availableModels = []api.ModelChoice{{
+			Provider: "openai",
+			Slug:     fallback,
+			Display:  fallback,
+		}}
+		m.selectedModel = fallback
+		if m.defaultModelSlug == "" {
+			m.defaultModelSlug = fallback
+		}
+	}
+
+	m.chat.SetModel(m.modelDisplayName(m.selectedModel))
+}
+
+// modelDisplayName returns the user-facing label for slug, falling back
+// to the slug itself when no matching ModelChoice is found.
+func (m Model) modelDisplayName(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+	for _, c := range m.availableModels {
+		if c.Slug == slug {
+			if d := strings.TrimSpace(c.Display); d != "" {
+				return d
+			}
+			return c.Slug
+		}
+	}
+	return slug
+}
+
+// persistSelectedModel writes the current selectedModel slug to
+// ~/.papermap/config.yaml. Errors are intentionally swallowed: a failed
+// write should not block the user from continuing the session.
+func (m *Model) persistSelectedModel() {
+	cfg := m.config
+	cfg.SelectedModel = m.selectedModel
+	if err := config.Save(cfg); err == nil {
+		m.config = cfg
+	}
+}
+
+// clearPersistedModel wipes the SelectedModel field from disk. Called on
+// session expiry / logout so the next user does not inherit the prior
+// account's model preference (which may not be in their tier).
+func (m *Model) clearPersistedModel() {
+	cfg := m.config
+	cfg.SelectedModel = ""
+	if err := config.Save(cfg); err == nil {
+		m.config = cfg
+	}
+	m.selectedModel = ""
+	m.availableModels = nil
+	m.defaultModelSlug = ""
+	m.chat.SetModel("")
 }
 
 // closeStream closes the SSE subscription without cancelling the parent

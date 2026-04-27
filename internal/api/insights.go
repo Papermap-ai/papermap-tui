@@ -24,6 +24,10 @@ type InsightRequest struct {
 	StreamExecution         bool   `json:"stream_execution"`
 	DisplayPrompt           string `json:"display_prompt,omitempty"`
 	InteractionSource       string `json:"interaction_source,omitempty"`
+	// LLMModel is the model slug returned by GET /api/v1/options/models
+	// (e.g. "gpt-5.4-mini", "opus-4.6"). Empty value omits the field and
+	// the backend falls back to its default model.
+	LLMModel string `json:"llm_model,omitempty"`
 }
 
 type InsightResponse struct {
@@ -55,9 +59,7 @@ type ChartConfig struct {
 	XKey     string
 	YKey     string
 	LabelKey string
-	// Colors is the LLM-suggested palette as raw hex strings. May be
-	// nil. Renderers are free to ignore it in favor of the theme palette.
-	Colors []string
+	Colors   []string
 }
 
 // ChartConfigFromMap parses a backend `visualization_config` map into a

@@ -9,6 +9,7 @@ import "github.com/papermap/papermap-tui/internal/ui/components/palette"
 const (
 	commandConversations   = "conversations"
 	commandSwitchWorkspace = "switch-workspace"
+	commandSwitchModel     = "switch-model"
 	commandToggleThinking  = "toggle-thinking"
 	commandClearSession    = "clear-session"
 	commandQuit            = "quit"
@@ -29,6 +30,12 @@ func chatPaletteCommands() []palette.Command {
 			Title:    "Switch workspace",
 			Hint:     "Change the active workspace",
 			Shortcut: "Ctrl+W",
+		},
+		{
+			ID:       commandSwitchModel,
+			Title:    "Switch model",
+			Hint:     "Choose which LLM answers prompts",
+			Shortcut: "Tab",
 		},
 		{
 			ID:       commandToggleThinking,
