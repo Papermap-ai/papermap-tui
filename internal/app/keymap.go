@@ -6,4 +6,8 @@ const (
 	keyEscape          = "esc"
 	keySwitchWorkspace = "ctrl+w"
 	keyClearChat       = "ctrl+l"
+	keyCommandPalette  = "/"
+	keyConversations   = "ctrl+p"
+	keyToggleThinking  = "ctrl+t"
+	keyCycleModel      = "tab"
 )

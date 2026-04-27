@@ -53,6 +53,17 @@ func addLeftBar(barStyle lipgloss.Style, content string) string {
 	return strings.Join(result, "\n")
 }
 
+// prefixLines prepends prefix to every line in content. Used to insert a
+// pre-styled gutter column inside a multi-line block (e.g. an extra space
+// painted with the input background) without disturbing the content.
+func prefixLines(content, prefix string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
 // padLinesToWidth ensures every line in content is a solid rectangle of width
 // columns by re-painting the trailing unstyled gap with bgStyle. The upstream
 // textarea emits end-of-buffer lines where the trailing whitespace lies

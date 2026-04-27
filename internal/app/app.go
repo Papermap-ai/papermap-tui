@@ -17,8 +17,11 @@ import (
 	"github.com/papermap/papermap-tui/internal/config"
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
+	"github.com/papermap/papermap-tui/internal/ui/chat/conversations"
+	"github.com/papermap/papermap-tui/internal/ui/chat/modelpicker"
 	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/components/charts"
+	"github.com/papermap/papermap-tui/internal/ui/components/palette"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
 )
@@ -30,6 +33,9 @@ const (
 	screenLanding         screen = "landing"
 	screenChat            screen = "chat"
 	screenWorkspacePicker screen = "workspace_picker"
+	screenModelPicker     screen = "model_picker"
+	screenCommandPalette  screen = "command_palette"
+	screenConversations   screen = "conversations"
 )
 
 // Minimum terminal dimensions required for the UI to render correctly.
@@ -46,7 +52,13 @@ type startupMsg struct {
 	authenticated bool
 	client        *api.Client
 	workspace     *api.UnifiedWorkspace
-	err           error
+	// models carries the available LLM choices for the current user.
+	// May be nil when the fetch failed; the app falls back to a single
+	// synthetic choice based on the persisted slug or the hardcoded
+	// FallbackDefaultModel so the UI still renders.
+	models   []api.ModelChoice
+	defModel string
+	err      error
 }
 
 type workspaceLoadedMsg struct {
@@ -122,6 +134,15 @@ type sessionExpiredMsg struct {
 	reason string
 }
 
+// insightCancelledMsg signals that a user-initiated cancel has finished
+// firing the backend cancel endpoint. The local stream/context teardown
+// happens synchronously when esc is handled; this message only carries
+// any backend error so the UI can surface a non-blocking notice.
+type insightCancelledMsg struct {
+	requestID string
+	err       string
+}
+
 type Model struct {
 	width            int
 	height           int
@@ -149,6 +170,9 @@ type Model struct {
 	landing          landing.Model
 	chat             chat.Model
 	workspace        workspace.Model
+	modelPicker      modelpicker.Model
+	palette          palette.Model
+	conversations    conversations.Model
 	store            *auth.TokenStore
 	spinner          spinner.Model
 	confirmQuit      bool
@@ -160,6 +184,20 @@ type Model struct {
 	// cancel the HTTP body: that POST is the authoritative source of the
 	// final answer and outlives the SSE complete sentinel.
 	insightCancel context.CancelFunc
+	// cancelNotice surfaces a transient warning after a user-initiated
+	// cancel when the backend cancel endpoint failed. The local cancel
+	// always succeeds; this only signals that the agent run may keep
+	// going server-side. Cleared on the next user action.
+	cancelNotice string
+	// availableModels is the flattened list of LLM choices fetched at
+	// startup. Used by the model picker and TAB cycle.
+	availableModels []api.ModelChoice
+	// selectedModel is the slug currently routed on outgoing insight
+	// requests. Persisted to config.SelectedModel on change.
+	selectedModel string
+	// defaultModelSlug is the backend-recommended default. Used when
+	// the persisted SelectedModel is empty or no longer valid.
+	defaultModelSlug string
 }
 
 func Run() error {
@@ -193,6 +231,9 @@ func NewModel() (Model, error) {
 		landing:       landing.NewModel(),
 		chat:          chat.NewModel(th),
 		workspace:     workspace.NewModel(),
+		modelPicker:   modelpicker.NewModel(),
+		palette:       palette.NewModel(),
+		conversations: conversations.NewModel(),
 		workspaces:    cache.Workspaces,
 		workspacesAt:  cache.UpdatedAt,
 		store:         store,
@@ -220,8 +261,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.switchWorkspace(msg.Workspace), nil
 	case workspace.CancelMsg:
 		return m.handleWorkspaceCancel(), nil
+	case modelpicker.SelectMsg:
+		return m.handleModelPickerSelect(msg), nil
+	case modelpicker.CancelMsg:
+		return m.handleModelPickerCancel(), nil
 	case workspaceLoadedMsg:
 		return m.handleWorkspaceLoaded(msg), nil
+	case chatHistoryLoadedMsg:
+		return m.handleChatHistoryLoaded(msg)
+	case conversationsLoadedMsg:
+		return m.handleConversationsLoaded(msg)
+	case chartBackfilledMsg:
+		return m.handleChartBackfilled(msg)
+	case palette.SelectMsg:
+		cmd := m.dispatchPaletteCommand(msg.Command)
+		return m, cmd
+	case palette.CancelMsg:
+		m.screen = screenChat
+		return m, nil
+	case conversations.OpenChatMsg:
+		// Show the conversations panel in a loading state while the
+		// page-1 fetch runs so the user sees feedback. The handler
+		// flips back to chat on success.
+		m.conversations.Reset()
+		return m, m.fetchConversations(msg.Chat)
+	case conversations.LoadMoreMsg:
+		return m, m.fetchChatHistory(m.conversations.Page() + 1)
+	case conversations.CancelMsg:
+		m.screen = screenChat
+		return m, nil
 	case chat.SubmitMsg:
 		// Clear startup errors once the user is actively chatting.
 		m.startupErr = nil
@@ -236,6 +304,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleInsightChunk(msg)
 	case sessionExpiredMsg:
 		return m.handleSessionExpired(msg)
+	case insightCancelledMsg:
+		return m.handleInsightCancelled(msg)
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 	}
@@ -248,6 +318,7 @@ func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
 	m.client = msg.client
 	m.startupErr = msg.err
 	m.applyWorkspace(msg.workspace)
+	m.hydrateModels(msg.models, msg.defModel)
 	if m.authenticated {
 		if cred, err := m.store.Load(); err == nil {
 			m.user = cred.User
@@ -430,6 +501,7 @@ func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) 
 	m.user = auth.User{}
 	_ = m.store.Clear()
 	_ = config.ClearWorkspaces()
+	m.clearPersistedModel()
 	m.workspaces = nil
 	m.workspacesAt = time.Time{}
 	m.chat.Clear()
@@ -440,6 +512,49 @@ func (m Model) handleSessionExpired(msg sessionExpiredMsg) (tea.Model, tea.Cmd) 
 	m.landingMessage = reason
 	m.screen = screenLanding
 	return m, tea.Quit
+}
+
+// handleInsightCancelled processes the result of the async backend cancel
+// call. The local cancel happened synchronously when esc was pressed; this
+// only surfaces a transient notice when the backend rejected the cancel
+// so the user knows the agent run may continue server-side.
+func (m Model) handleInsightCancelled(msg insightCancelledMsg) (tea.Model, tea.Cmd) {
+	if msg.err != "" {
+		m.cancelNotice = "Cancel may not have reached the server: " + msg.err
+	}
+	return m, nil
+}
+
+// userCancelInsight performs the synchronous teardown of an in-flight
+// insight request and returns a tea.Cmd that fires the backend cancel
+// endpoint asynchronously. The originating user prompt stays in the
+// transcript and the pending assistant slot becomes an inline ERROR
+// badge so the cancellation reads as a deliberate event.
+func (m *Model) userCancelInsight() tea.Cmd {
+	requestID := strings.TrimSpace(m.pendingRequestID)
+
+	m.cancelInsight()
+	m.resetInsightState()
+	m.cancelNotice = ""
+	m.chat.CancelStream()
+
+	if requestID == "" || m.client == nil {
+		return nil
+	}
+
+	client := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := client.CancelInsight(ctx, api.CancelInsightRequest{
+			RequestID: requestID,
+			Reason:    "user_cancelled",
+		})
+		if err != nil {
+			return insightCancelledMsg{requestID: requestID, err: err.Error()}
+		}
+		return insightCancelledMsg{requestID: requestID}
+	}
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -453,9 +568,27 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.screen == screenCommandPalette {
+		updated, cmd := m.palette.Update(msg)
+		m.palette = updated
+		return m, cmd
+	}
+
+	if m.screen == screenConversations {
+		updated, cmd := m.conversations.Update(msg)
+		m.conversations = updated
+		return m, cmd
+	}
+
 	if m.screen == screenWorkspacePicker {
 		updatedPicker, cmd := m.workspace.Update(msg)
 		m.workspace = updatedPicker
+		return m, cmd
+	}
+
+	if m.screen == screenModelPicker {
+		updatedPicker, cmd := m.modelPicker.Update(msg)
+		m.modelPicker = updatedPicker
 		return m, cmd
 	}
 
@@ -463,6 +596,38 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Unauthenticated landing is a terminal screen; any key quits so
 		// the user can run `papermap auth login`.
 		return m, tea.Quit
+	}
+
+	// Intercept palette and conversations openers BEFORE delegating to
+	// chat.Update so the textarea does not consume them. "/" is only an
+	// opener when the textarea is empty; otherwise it falls through to
+	// be typed as a literal character. ctrl+p is always an opener.
+	if m.screen == screenChat && m.authenticated {
+		switch msg.String() {
+		case keyCommandPalette:
+			if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() {
+				m.openCommandPalette()
+				return m, nil
+			}
+		case keyConversations:
+			if !m.chat.IsStreaming() {
+				return m, m.openConversations()
+			}
+		case keyCycleModel:
+			// TAB cycles to the next available model. Suppressed
+			// while streaming so an in-flight request keeps the
+			// model that produced it.
+			if !m.chat.IsStreaming() {
+				return m.cycleModel(), nil
+			}
+		case keyEscape:
+			// While streaming, esc cancels the in-flight request. Keep
+			// this above the chat.Update delegation so the textarea
+			// does not see the keystroke.
+			if m.chat.IsStreaming() {
+				return m, m.userCancelInsight()
+			}
+		}
 	}
 
 	if m.screen == screenChat {
@@ -508,11 +673,30 @@ func (m Model) View() tea.View {
 			content,
 		}, "\n")
 	}
+	if m.cancelNotice != "" && m.screen == screenChat {
+		content = strings.Join([]string{
+			m.theme.Muted.Render(m.cancelNotice),
+			"",
+			content,
+		}, "\n")
+	}
 
 	base := m.frame(content)
 
 	if m.screen == screenWorkspacePicker {
 		base = m.overlayWorkspacePicker(base)
+	}
+
+	if m.screen == screenModelPicker {
+		base = m.overlayModelPicker(base)
+	}
+
+	if m.screen == screenCommandPalette {
+		base = m.overlayCommandPalette(base)
+	}
+
+	if m.screen == screenConversations {
+		base = m.overlayConversations(base)
 	}
 
 	if m.confirmQuit {
@@ -568,14 +752,14 @@ func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.confirmQuitYes = !m.confirmQuitYes
 		return m, nil
 	case "y", "Y":
-		return m, tea.Quit
+		return m, m.quitWithCancel()
 	case "n", "N", keyEscape:
 		m.confirmQuit = false
 		m.confirmQuitYes = false
 		return m, nil
 	case keyEnter:
 		if m.confirmQuitYes {
-			return m, tea.Quit
+			return m, m.quitWithCancel()
 		}
 		m.confirmQuit = false
 		m.confirmQuitYes = false
@@ -585,6 +769,32 @@ func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// quitWithCancel tears down any in-flight insight request and fires a
+// best-effort backend cancel before quitting. The backend call is bounded
+// by a short timeout so an unresponsive server cannot delay shutdown.
+func (m *Model) quitWithCancel() tea.Cmd {
+	requestID := strings.TrimSpace(m.pendingRequestID)
+	hasClient := m.client != nil
+	m.cancelInsight()
+	m.resetInsightState()
+
+	if requestID == "" || !hasClient {
+		return tea.Quit
+	}
+
+	client := m.client
+	cancelCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = client.CancelInsight(ctx, api.CancelInsightRequest{
+			RequestID: requestID,
+			Reason:    "user_cancelled",
+		})
+		return nil
+	}
+	return tea.Sequence(cancelCmd, tea.Quit)
 }
 
 func (m Model) loadStartup() tea.Cmd {
@@ -613,7 +823,25 @@ func (m Model) loadStartup() tea.Cmd {
 			return startupMsg{config: cfg, authenticated: authenticated, client: client, err: err}
 		}
 
-		return startupMsg{config: cfg, authenticated: authenticated, client: client, workspace: workspace}
+		var (
+			models   []api.ModelChoice
+			defModel string
+		)
+		if authenticated {
+			if opts, optsErr := client.ListModels(context.Background()); optsErr == nil {
+				models = opts.Flatten()
+				defModel = opts.DefaultSlug()
+			}
+		}
+
+		return startupMsg{
+			config:        cfg,
+			authenticated: authenticated,
+			client:        client,
+			workspace:     workspace,
+			models:        models,
+			defModel:      defModel,
+		}
 	}
 }
 
@@ -660,7 +888,8 @@ func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, er
 }
 
 func (m Model) handleEscape() Model {
-	if m.screen == screenWorkspacePicker {
+	switch m.screen {
+	case screenWorkspacePicker, screenModelPicker, screenCommandPalette, screenConversations:
 		if m.authenticated {
 			m.screen = screenChat
 		} else {
@@ -683,7 +912,7 @@ func (m Model) viewScreen() string {
 	switch m.screen {
 	case screenSplash:
 		return m.splashView()
-	case screenChat, screenWorkspacePicker:
+	case screenChat, screenWorkspacePicker, screenModelPicker, screenCommandPalette, screenConversations:
 		return m.chat.View(m.theme, m.workspaceName, m.width)
 	default:
 		return m.landing.View(m.theme, m.width, m.landingMessage)
@@ -696,8 +925,13 @@ func (m Model) frame(content string) string {
 		return styled
 	}
 
-	// For chat screen, don't center - just return styled content to prevent clipping.
-	if m.screen == screenChat {
+	// For chat-derived screens (chat + overlays), don't center - just
+	// return styled content to prevent clipping.
+	if m.screen == screenChat ||
+		m.screen == screenWorkspacePicker ||
+		m.screen == screenModelPicker ||
+		m.screen == screenCommandPalette ||
+		m.screen == screenConversations {
 		return styled
 	}
 
@@ -776,6 +1010,7 @@ func (m Model) startInsight(msg chat.SubmitMsg) tea.Cmd {
 			StreamExecution:         true,
 			DisplayPrompt:           msg.Prompt,
 			InteractionSource:       "user_query",
+			LLMModel:                strings.TrimSpace(m.selectedModel),
 		}
 
 		// HTTP call runs in a goroutine so its result can be picked up by a
@@ -1146,6 +1381,100 @@ func (m *Model) applyWorkspace(workspace *api.UnifiedWorkspace) {
 	if name := strings.TrimSpace(workspace.Name); name != "" {
 		m.workspaceName = name
 	}
+}
+
+// hydrateModels seeds availableModels, defaultModelSlug, and selectedModel
+// from the startup fetch. Resolution order for selectedModel:
+//   - persisted config.SelectedModel if still present in availableModels
+//   - backend recommended default (defModel)
+//   - first available slug
+//   - api.FallbackDefaultModel (with a synthetic single-entry list so the
+//     UI still renders when the options fetch failed entirely)
+func (m *Model) hydrateModels(models []api.ModelChoice, defModel string) {
+	m.availableModels = models
+	m.defaultModelSlug = strings.TrimSpace(defModel)
+
+	persisted := strings.TrimSpace(m.config.SelectedModel)
+
+	hasSlug := func(slug string) bool {
+		for _, c := range m.availableModels {
+			if c.Slug == slug {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch {
+	case persisted != "" && hasSlug(persisted):
+		m.selectedModel = persisted
+	case m.defaultModelSlug != "" && hasSlug(m.defaultModelSlug):
+		m.selectedModel = m.defaultModelSlug
+	case len(m.availableModels) > 0:
+		m.selectedModel = m.availableModels[0].Slug
+	default:
+		// Options fetch failed and we have no list. Synthesize one so
+		// the picker / badge are not empty.
+		fallback := persisted
+		if fallback == "" {
+			fallback = api.FallbackDefaultModel
+		}
+		m.availableModels = []api.ModelChoice{{
+			Provider: "openai",
+			Slug:     fallback,
+			Display:  fallback,
+		}}
+		m.selectedModel = fallback
+		if m.defaultModelSlug == "" {
+			m.defaultModelSlug = fallback
+		}
+	}
+
+	m.chat.SetModel(m.modelDisplayName(m.selectedModel))
+}
+
+// modelDisplayName returns the user-facing label for slug, falling back
+// to the slug itself when no matching ModelChoice is found.
+func (m Model) modelDisplayName(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+	for _, c := range m.availableModels {
+		if c.Slug == slug {
+			if d := strings.TrimSpace(c.Display); d != "" {
+				return d
+			}
+			return c.Slug
+		}
+	}
+	return slug
+}
+
+// persistSelectedModel writes the current selectedModel slug to
+// ~/.papermap/config.yaml. Errors are intentionally swallowed: a failed
+// write should not block the user from continuing the session.
+func (m *Model) persistSelectedModel() {
+	cfg := m.config
+	cfg.SelectedModel = m.selectedModel
+	if err := config.Save(cfg); err == nil {
+		m.config = cfg
+	}
+}
+
+// clearPersistedModel wipes the SelectedModel field from disk. Called on
+// session expiry / logout so the next user does not inherit the prior
+// account's model preference (which may not be in their tier).
+func (m *Model) clearPersistedModel() {
+	cfg := m.config
+	cfg.SelectedModel = ""
+	if err := config.Save(cfg); err == nil {
+		m.config = cfg
+	}
+	m.selectedModel = ""
+	m.availableModels = nil
+	m.defaultModelSlug = ""
+	m.chat.SetModel("")
 }
 
 // closeStream closes the SSE subscription without cancelling the parent

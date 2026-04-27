@@ -125,9 +125,8 @@ func TestChatClearTranscriptViaModel(t *testing.T) {
 
 // TestChatTraceLifecycle drives a full assistant request: submit, stream
 // thoughts and a tool call, then complete. Asserts the live ticker shows
-// during streaming, the trace stays visible (expanded) by default after
-// the answer arrives, the [shown] badge is rendered, and ctrl+t collapses
-// it to a [hidden] summary.
+// during streaming, the trace stays expanded by default after the answer
+// arrives, and ctrl+t hides the completed trace entirely.
 func TestChatTraceLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -157,8 +156,8 @@ func TestChatTraceLifecycle(t *testing.T) {
 		t.Fatalf("expected tool call title visible during stream, got %q", view)
 	}
 
-	// Finish the stream. Trace stays expanded by default with a [shown]
-	// badge so it's obvious that thinking is on display.
+	// Finish the stream. Trace stays expanded by default because
+	// showThinking starts true.
 	model.AppendStreamText("Done.")
 	model.CompleteStream()
 
@@ -166,37 +165,39 @@ func TestChatTraceLifecycle(t *testing.T) {
 	if !strings.Contains(view, "▾ Thinking") {
 		t.Fatalf("expected expanded trace header after complete, got %q", view)
 	}
-	if !strings.Contains(view, "[shown]") {
-		t.Fatalf("expected [shown] badge after complete, got %q", view)
-	}
 	if !strings.Contains(view, "Run SQL") {
 		t.Fatalf("expected tool call still visible after complete, got %q", view)
 	}
+	if !strings.Contains(view, "thinking [on]") {
+		t.Fatalf("expected hint to show thinking [on], got %q", view)
+	}
 
-	// Press ctrl+t to hide. Header switches to collapsed marker + badge.
+	// Press ctrl+t to hide. With thinking off and the trace complete,
+	// the trace block disappears entirely.
 	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
 	model = updated
 	view = model.View(th, "Unified Workspace", 120)
-	if !strings.Contains(view, "▸ Thinking") {
-		t.Fatalf("expected collapsed trace header after ctrl+t, got %q", view)
-	}
-	if !strings.Contains(view, "[hidden]") {
-		t.Fatalf("expected [hidden] badge after ctrl+t, got %q", view)
+	if strings.Contains(view, "▾ Thinking") || strings.Contains(view, "▸ Thinking") {
+		t.Fatalf("expected trace hidden after ctrl+t, got %q", view)
 	}
 	if strings.Contains(view, "Run SQL") {
-		t.Fatalf("expected tool call hidden when collapsed, got %q", view)
+		t.Fatalf("expected tool call hidden when trace is off, got %q", view)
+	}
+	if !strings.Contains(view, "thinking [off]") {
+		t.Fatalf("expected hint to show thinking [off], got %q", view)
 	}
 }
 
-// TestChatToggleAllTraces verifies ctrl+t flips every assistant message's
-// trace at once and works while the textarea contains text.
-func TestChatToggleAllTraces(t *testing.T) {
+// TestChatThinkingTogglePersistsAcrossMessages verifies ctrl+t toggles a
+// global preference and that the muted streaming preview replaces the
+// full trace while a request is in flight with thinking off.
+func TestChatThinkingTogglePersistsAcrossMessages(t *testing.T) {
 	t.Parallel()
 
 	th := theme.Default()
 	model := sizeModel(t, chat.NewModel(th))
 
-	// First request with a trace.
+	// First request: full trace + answer with thinking on (default).
 	model = typeKeys(model, "a")
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated
@@ -206,44 +207,89 @@ func TestChatToggleAllTraces(t *testing.T) {
 	model.AppendStreamText("first")
 	model.CompleteStream()
 
-	// Second request with a trace.
+	view := model.View(th, "Unified Workspace", 120)
+	if !strings.Contains(view, "Tool A") {
+		t.Fatalf("expected first tool visible by default, got %q", view)
+	}
+
+	// Toggle thinking off. The completed first trace disappears.
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
+	model = updated
+	view = model.View(th, "Unified Workspace", 120)
+	if strings.Contains(view, "Tool A") {
+		t.Fatalf("expected first tool hidden after toggle off, got %q", view)
+	}
+
+	// Start a second request. While streaming with thinking off, the
+	// muted preview should appear with the latest thought snippet.
 	model = typeKeys(model, "b")
 	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated
-	model.AppendStreamTrace(chat.TraceStep{
-		Kind: chat.TraceToolCall, ToolCallID: "x2", Title: "Tool B",
-	})
+	model.MergeStreamThoughtDelta(1, "Considering join strategy", true)
+	view = model.View(th, "Unified Workspace", 120)
+	if !strings.Contains(view, "· thinking") {
+		t.Fatalf("expected muted thinking preview during stream, got %q", view)
+	}
+	if !strings.Contains(view, "Considering join strategy") {
+		t.Fatalf("expected latest thought snippet in muted preview, got %q", view)
+	}
+	if strings.Contains(view, "▾ Thinking") {
+		t.Fatalf("did not expect full trace header while toggle is off, got %q", view)
+	}
+
+	// Complete the second stream; preview vanishes entirely.
 	model.AppendStreamText("second")
 	model.CompleteStream()
-
-	// Both traces start expanded by default.
-	view := model.View(th, "Unified Workspace", 120)
-	if strings.Count(view, "▾ Thinking") != 2 {
-		t.Fatalf("expected two expanded trace headers, got %q", view)
-	}
-	if !strings.Contains(view, "Tool A") || !strings.Contains(view, "Tool B") {
-		t.Fatalf("expected both tool titles visible by default, got %q", view)
-	}
-
-	// Type into the textarea to confirm ctrl+t still fires.
-	model = typeKeys(model, "c")
-
-	// ctrl+t collapses every trace.
-	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
-	model = updated
 	view = model.View(th, "Unified Workspace", 120)
-	if strings.Count(view, "▸ Thinking") != 2 {
-		t.Fatalf("expected two collapsed trace headers after ctrl+t, got %q", view)
+	if strings.Contains(view, "· thinking") {
+		t.Fatalf("expected preview gone after complete with toggle off, got %q", view)
 	}
-	if strings.Contains(view, "Tool A") || strings.Contains(view, "Tool B") {
-		t.Fatalf("expected tool titles hidden after collapse, got %q", view)
+	if strings.Contains(view, "Tool A") {
+		t.Fatalf("expected first tool still hidden after second complete, got %q", view)
 	}
 
-	// ctrl+t again expands everything.
+	// Toggle thinking back on. Both traces re-appear in full.
 	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: 't', Mod: tea.ModCtrl}))
 	model = updated
 	view = model.View(th, "Unified Workspace", 120)
 	if strings.Count(view, "▾ Thinking") != 2 {
-		t.Fatalf("expected two expanded trace headers after second ctrl+t, got %q", view)
+		t.Fatalf("expected two expanded trace headers after toggle back on, got %q", view)
+	}
+	if !strings.Contains(view, "Tool A") {
+		t.Fatalf("expected first tool visible again after toggle on, got %q", view)
+	}
+}
+
+// TestCtrlLClearsTextarea verifies that ctrl+l wipes the entire prompt
+// input. ctrl+l is the canonical "clear" key documented in
+// internal/ui/AGENTS.md. Plain backspace is left to the textarea
+// defaults so it still deletes a single character.
+func TestCtrlLClearsTextarea(t *testing.T) {
+	t.Parallel()
+
+	th := theme.Default()
+	model := sizeModel(t, chat.NewModel(th))
+	model = typeKeys(model, "h", "e", "l", "l", "o")
+
+	if got := model.TextareaValue(); got != "hello" {
+		t.Fatalf("textarea before ctrl+l: got %q want %q", got, "hello")
+	}
+
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'l', Mod: tea.ModCtrl}))
+	model = updated
+
+	if got := model.TextareaValue(); got != "" {
+		t.Fatalf("textarea after ctrl+l: got %q want empty", got)
+	}
+
+	// Sanity: plain backspace still deletes one character, not all.
+	model = typeKeys(model, "a", "b", "c")
+	if got := model.TextareaValue(); got != "abc" {
+		t.Fatalf("textarea after retyping: got %q want %q", got, "abc")
+	}
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	model = updated
+	if got := model.TextareaValue(); got != "ab" {
+		t.Fatalf("textarea after plain backspace: got %q want %q", got, "ab")
 	}
 }

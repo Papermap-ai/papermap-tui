@@ -24,6 +24,10 @@ type InsightRequest struct {
 	StreamExecution         bool   `json:"stream_execution"`
 	DisplayPrompt           string `json:"display_prompt,omitempty"`
 	InteractionSource       string `json:"interaction_source,omitempty"`
+	// LLMModel is the model slug returned by GET /api/v1/options/models
+	// (e.g. "gpt-5.4-mini", "opus-4.6"). Empty value omits the field and
+	// the backend falls back to its default model.
+	LLMModel string `json:"llm_model,omitempty"`
 }
 
 type InsightResponse struct {
@@ -55,9 +59,7 @@ type ChartConfig struct {
 	XKey     string
 	YKey     string
 	LabelKey string
-	// Colors is the LLM-suggested palette as raw hex strings. May be
-	// nil. Renderers are free to ignore it in favor of the theme palette.
-	Colors []string
+	Colors   []string
 }
 
 // ChartConfigFromMap parses a backend `visualization_config` map into a
@@ -272,6 +274,51 @@ func GenerateRequestID() string {
 		return fmt.Sprintf("chat_%d_%d", time.Now().UnixMilli(), time.Now().UnixNano())
 	}
 	return fmt.Sprintf("chat_%d_%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
+}
+
+// CancelInsightRequest tells the backend to abort a running insight
+// agent run identified by RequestID. Reason is forwarded for telemetry;
+// callers should pass "user_cancelled" for explicit user-initiated stops.
+type CancelInsightRequest struct {
+	RequestID string `json:"request_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// CancelInsightResponse is the unwrapped data payload returned by
+// /api/v1/analytics/charts/cancel. The wrapping {message, success, data}
+// envelope is unwrapped by decodeJSONResponse before this struct is
+// populated, so it carries only the inner fields.
+type CancelInsightResponse struct {
+	RequestID string `json:"request_id"`
+	ChatID    string `json:"chat_id"`
+	Status    string `json:"status"`
+}
+
+// CancelInsight asks the backend to terminate an in-flight agent run.
+// This complements client-side context cancellation: cancelling ctx tears
+// down the local HTTP/SSE connections, but the backend keeps working
+// unless this endpoint is hit. Callers should pass a fresh background
+// context (the original request ctx is typically already cancelled).
+func (c *Client) CancelInsight(ctx context.Context, reqBody CancelInsightRequest) (CancelInsightResponse, error) {
+	if strings.TrimSpace(reqBody.RequestID) == "" {
+		return CancelInsightResponse{}, fmt.Errorf("request_id is required")
+	}
+	if strings.TrimSpace(reqBody.Reason) == "" {
+		reqBody.Reason = "user_cancelled"
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodPost, "/api/v1/analytics/charts/cancel", reqBody)
+	if err != nil {
+		return CancelInsightResponse{}, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return CancelInsightResponse{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return decodeJSONResponse[CancelInsightResponse](resp)
 }
 
 func (c *Client) StartInsight(ctx context.Context, reqBody InsightRequest) (InsightResponse, error) {

@@ -188,3 +188,87 @@ func TestStartInsightAndStream(t *testing.T) {
 		t.Fatalf("unexpected stream request payload: %+v", streamRequest)
 	}
 }
+
+func TestCancelInsight(t *testing.T) {
+	t.Parallel()
+
+	var (
+		gotPath    string
+		gotMethod  string
+		gotAuth    string
+		gotRequest api.CancelInsightRequest
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read cancel request: %v", err)
+		}
+		if err := json.Unmarshal(body, &gotRequest); err != nil {
+			t.Fatalf("decode cancel request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(responseEnvelope[map[string]any]{
+			Message:    "cancelled",
+			Success:    true,
+			StatusCode: http.StatusOK,
+			Data: map[string]any{
+				"request_id": gotRequest.RequestID,
+				"chat_id":    "chat-abc",
+				"status":     "cancelled",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := api.NewClient(server.URL, server.Client(), insightTokenSource{})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	resp, err := client.CancelInsight(context.Background(), api.CancelInsightRequest{
+		RequestID: "req-cancel-1",
+	})
+	if err != nil {
+		t.Fatalf("CancelInsight returned error: %v", err)
+	}
+
+	if gotPath != "/api/v1/analytics/charts/cancel" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if gotMethod != http.MethodPost {
+		t.Fatalf("unexpected method: %s", gotMethod)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("unexpected auth header: %q", gotAuth)
+	}
+	if gotRequest.RequestID != "req-cancel-1" {
+		t.Fatalf("unexpected request_id: %q", gotRequest.RequestID)
+	}
+	if gotRequest.Reason != "user_cancelled" {
+		t.Fatalf("expected reason to default to user_cancelled, got %q", gotRequest.Reason)
+	}
+	if resp.RequestID != "req-cancel-1" || resp.ChatID != "chat-abc" || resp.Status != "cancelled" {
+		t.Fatalf("unexpected cancel response: %+v", resp)
+	}
+}
+
+func TestCancelInsightRequiresRequestID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server should not be called when request_id is empty")
+	}))
+	defer server.Close()
+
+	client, err := api.NewClient(server.URL, server.Client(), insightTokenSource{})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.CancelInsight(context.Background(), api.CancelInsightRequest{}); err == nil {
+		t.Fatal("expected error when request_id is missing")
+	}
+}
