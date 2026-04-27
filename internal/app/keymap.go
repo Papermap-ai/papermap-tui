@@ -9,4 +9,5 @@ const (
 	keyCommandPalette  = "/"
 	keyConversations   = "ctrl+p"
 	keyToggleThinking  = "ctrl+t"
+	keyCycleModel      = "tab"
 )

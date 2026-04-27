@@ -309,6 +309,9 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 	case commandSwitchWorkspace:
 		m.openWorkspacePicker()
 		return nil
+	case commandSwitchModel:
+		m.openModelPicker()
+		return nil
 	case commandToggleThinking:
 		m.screen = screenChat
 		m.chat.ToggleThinking()
