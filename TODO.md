@@ -16,10 +16,12 @@
 
 ## Phase Two
 - [x] Figure out how to display the content as it streams, particularly the thinking process.
-- [ ] Add rendering of the different types of charts
+- [x] Add rendering of the different types of charts
+- [x] Whiles the streaming is happening if you hide the thinking it should respect it whiles it's streaming the current content
+- [ ] Add an ability to view previous chat history also
+- [ ] Add an ability to change the model that the user is working with on papermap
 - [ ] Figure out how to add new workspaces from the UI
 - [ ] Figure out how to run shell commands in the chat
-- [ ] think about the ability to prepend some things like an md file to the prompts that you send to Alan
 
 ## Code Quality Followups
 - [x] Wire `context.Context` cancellation through SSE/HTTP insight goroutines so quit / Clear / workspace switch tear down cleanly (today they use `context.Background()`).

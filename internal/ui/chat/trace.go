@@ -136,35 +136,35 @@ func AppendToolOutputContent(steps []TraceStep, toolCallID string, content strin
 }
 
 // renderTrace returns the trace block for a message. Returns "" when the
-// message has no trace activity to display.
-func renderTrace(th theme.Theme, width int, message Message) string {
+// message has no trace activity to display, or when the user has hidden
+// thinking and the trace has finished.
+//
+// Branches:
+//   - showThinking && complete   -> full timeline.
+//   - showThinking && streaming  -> live rolling ticker (last 3 steps).
+//   - !showThinking && streaming -> muted single-line ellipsis preview.
+//   - !showThinking && complete  -> hidden ("").
+func renderTrace(th theme.Theme, width int, message Message, showThinking bool) string {
 	if len(message.Trace) == 0 {
 		return ""
 	}
 
+	if !showThinking {
+		if message.TraceComplete {
+			return ""
+		}
+		return mutedThinkingPreview(th, message.Trace)
+	}
+
 	muted := th.Muted
-	hint := th.KeyHint
 	accent := th.Accent.Bold(true)
 
 	stepCount := len(message.Trace)
 	stepsLabel := fmt.Sprintf("%d step%s", stepCount, pluralS(stepCount))
 
-	if message.TraceComplete && message.TraceCollapsed {
-		// Collapsed: dim, single-line summary with explicit hidden badge.
-		header := muted.Render(fmt.Sprintf("▸ Thinking · %s", stepsLabel))
-		badge := muted.Render("[hidden]")
-		tip := hint.Render("ctrl+t to show")
-		return header + " " + badge + " " + tip
-	}
-
-	// Expanded (or still streaming): bold accent header with shown badge
-	// so the toggled-on state is visually obvious.
 	var header string
 	if message.TraceComplete {
 		header = accent.Render(fmt.Sprintf("▾ Thinking · %s", stepsLabel))
-		badge := accent.Render("[shown]")
-		tip := hint.Render("ctrl+t to hide")
-		header = header + " " + badge + " " + tip
 	} else {
 		// Live: spinner-like header without the toggle hint.
 		header = accent.Render("▾ Thinking…")
@@ -194,6 +194,58 @@ func renderTrace(th theme.Theme, width int, message Message) string {
 		parts = append(parts, renderTraceStep(th, width, step))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// mutedThinkingPreview renders a single-line muted ellipsis preview used
+// while a trace is streaming with the thinking toggle off. Shows the
+// first 60 runes of the most recent thought (or the latest tool title
+// when no thought has streamed yet) so the user retains a faint signal
+// of progress without the full reasoning timeline.
+func mutedThinkingPreview(th theme.Theme, trace []TraceStep) string {
+	snippet := latestThinkingSnippet(trace)
+	if snippet == "" {
+		return th.Muted.Render("· thinking…")
+	}
+	return th.Muted.Render("· thinking " + truncateHead(snippet, 60) + "…")
+}
+
+// latestThinkingSnippet walks the trace from the end and returns the
+// most recent thought body (whitespace-collapsed). Falls back to the
+// latest tool call's title when no thought is present, so the preview
+// is non-empty as soon as anything starts streaming.
+func latestThinkingSnippet(trace []TraceStep) string {
+	for i := len(trace) - 1; i >= 0; i-- {
+		if trace[i].Kind != TraceThought {
+			continue
+		}
+		body := strings.Join(strings.Fields(trace[i].Body), " ")
+		if body != "" {
+			return body
+		}
+	}
+	for i := len(trace) - 1; i >= 0; i-- {
+		if trace[i].Kind != TraceToolCall {
+			continue
+		}
+		if title := strings.TrimSpace(trace[i].Title); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+// truncateHead returns the first n runes of s. When s already fits, it
+// is returned unchanged. Rune-safe so multi-byte characters aren't cut
+// mid-codepoint.
+func truncateHead(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }
 
 func renderTraceStep(th theme.Theme, width int, step TraceStep) string {

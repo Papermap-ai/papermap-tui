@@ -298,7 +298,7 @@ func TestStartupClearsExpiredCredentialsWhenRefreshFails(t *testing.T) {
 	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Focused terminal access to Papermap insights") {
+	if !strings.Contains(view, "Focused terminal access to Papermap Data Platform") {
 		t.Fatalf("expected landing view after failed refresh, got %q", view)
 	}
 
