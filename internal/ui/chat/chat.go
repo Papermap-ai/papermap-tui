@@ -58,12 +58,8 @@ type Message struct {
 	// streamed alongside the final answer. Rendered above the body so
 	// the trace reads as supporting context.
 	Trace []TraceStep
-	// TraceCollapsed controls whether a completed trace is shown as a
-	// single summary line or fully expanded. While streaming the value
-	// is ignored and the renderer shows a rolling ticker.
-	TraceCollapsed bool
-	// TraceComplete latches on once the request finishes so the renderer
-	// switches from the live ticker to the collapsible summary.
+	// TraceComplete latches once the request finishes so the renderer
+	// can switch from the live preview to the full trace.
 	TraceComplete bool
 }
 
@@ -82,6 +78,12 @@ type Model struct {
 	activeResponse int
 	theme          theme.Theme
 	lastTAHeight   int
+	// showThinking is the sticky preference for the reasoning trace
+	// display, toggled with ctrl+t. When true the renderer shows the
+	// full trace (live ticker while streaming, full timeline after
+	// completion). When false it shows a muted single-line preview
+	// while streaming and hides the trace entirely after completion.
+	showThinking bool
 	// userScrolled latches when the user moves the viewport away from
 	// the bottom (mouse wheel, page-up, etc). Streaming updates respect
 	// this flag and stop forcing the viewport to the bottom so trace
@@ -139,6 +141,7 @@ func NewModel(th theme.Theme) Model {
 		spinner:        sp,
 		activeResponse: -1,
 		theme:          th,
+		showThinking:   true,
 	}
 }
 
@@ -228,9 +231,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 		if key == "ctrl+t" {
-			if m.ToggleAllTraces() {
-				return m, nil
-			}
+			m.showThinking = !m.showThinking
+			m.syncViewportContent()
+			return m, nil
 		}
 
 		// Only block submit while streaming; other input still flows.
@@ -377,36 +380,17 @@ func (m *Model) AppendStreamToolOutputContent(toolCallID string, content string)
 	m.scrollToBottom()
 }
 
-// ToggleAllTraces flips the collapsed/expanded state of every completed
-// assistant trace in the transcript. When any eligible trace is currently
-// expanded the press collapses everything; otherwise it expands all so a
-// single keybind reliably reveals or hides the reasoning. Returns true
-// when at least one trace was eligible.
-func (m *Model) ToggleAllTraces() bool {
-	anyExpanded := false
-	hasTrace := false
-	for _, msg := range m.messages {
-		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
-			continue
-		}
-		hasTrace = true
-		if !msg.TraceCollapsed {
-			anyExpanded = true
-		}
-	}
-	if !hasTrace {
-		return false
-	}
-	// If anything is open, close everything. Otherwise open everything.
-	collapse := anyExpanded
-	for i, msg := range m.messages {
-		if msg.Role != "alan" || len(msg.Trace) == 0 || !msg.TraceComplete {
-			continue
-		}
-		m.messages[i].TraceCollapsed = collapse
-	}
+// ToggleThinking flips the sticky reasoning-trace visibility preference.
+// Exposed so callers (tests, future menu actions) can drive the toggle
+// without going through a key event.
+func (m *Model) ToggleThinking() {
+	m.showThinking = !m.showThinking
 	m.syncViewportContent()
-	return true
+}
+
+// ShowThinking reports the current sticky reasoning-trace visibility.
+func (m Model) ShowThinking() bool {
+	return m.showThinking
 }
 
 func (m *Model) CompleteStream() {
@@ -423,10 +407,6 @@ func (m *Model) CompleteStream() {
 		m.messages[m.activeResponse].Pending = false
 		if len(m.messages[m.activeResponse].Trace) > 0 {
 			m.messages[m.activeResponse].TraceComplete = true
-			// Keep the thinking trace visible after the answer arrives
-			// so the user can read along without an extra keypress.
-			// ctrl+t hides it.
-			m.messages[m.activeResponse].TraceCollapsed = false
 		}
 	}
 	m.activeResponse = -1
@@ -445,7 +425,6 @@ func (m *Model) FailStream(err string) {
 		m.messages[m.activeResponse].Pending = false
 		if len(m.messages[m.activeResponse].Trace) > 0 {
 			m.messages[m.activeResponse].TraceComplete = true
-			m.messages[m.activeResponse].TraceCollapsed = false
 		}
 	}
 	m.activeResponse = -1
@@ -470,7 +449,7 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 	// Preserve the active assistant slot's accumulated trace so the
 	// thinking timeline survives the swap to the final answer body.
 	// The first replacement message inherits the prior trace and is
-	// marked complete so the toggle keybind treats it as eligible.
+	// marked complete so the visibility toggle treats it as eligible.
 	var carriedTrace []TraceStep
 	carryTrace := false
 	if m.activeResponse >= 0 && m.activeResponse < len(m.messages) {
@@ -487,9 +466,6 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 		if i == 0 && carryTrace && len(message.Trace) == 0 {
 			message.Trace = carriedTrace
 			message.TraceComplete = true
-			// Keep the trace visible by default so users can read
-			// the reasoning alongside the answer. ctrl+t hides it.
-			message.TraceCollapsed = false
 		}
 		replaced = append(replaced, message)
 	}
@@ -621,9 +597,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
 
 	// Key hints.
-	hints := th.KeyHint.Render(
-		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
-	)
+	hints := th.KeyHint.Render(thinkingHint(m.showThinking))
 
 	// Input area.
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
@@ -691,13 +665,13 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 		if i == m.activeResponse && message.Pending {
 			msgStatus = status
 		}
-		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame, msgStatus))
+		blocks = append(blocks, renderMessage(th, width, message, spinnerFrame, msgStatus, m.showThinking))
 	}
 
 	return strings.Join(blocks, "\n\n")
 }
 
-func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string) string {
+func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string, showThinking bool) string {
 	roleStyle := th.Accent
 	barColor := th.Accent
 	if message.Role == "you" {
@@ -722,7 +696,7 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	// Trace renders right after the role label so the reasoning timeline
 	// reads as supporting context above the actual answer body.
-	if trace := renderTrace(th, width, message); trace != "" {
+	if trace := renderTrace(th, width, message, showThinking); trace != "" {
 		parts = append(parts, trace)
 	}
 
@@ -760,6 +734,17 @@ func renderMessage(th theme.Theme, width int, message Message, spinnerFrame stri
 
 	// Add left accent bar.
 	return addLeftBar(barColor, content)
+}
+
+// thinkingHint returns the active-view bottom hint string with the
+// current thinking-trace visibility state appended so the keybinding's
+// effect is obvious without an experiment.
+func thinkingHint(showThinking bool) string {
+	state := "off"
+	if showThinking {
+		state = "on"
+	}
+	return "enter: submit  ·  ctrl+t: thinking [" + state + "]  ·  ctrl+w: switch  ·  ctrl+c: quit"
 }
 
 func clampWidth(width int, fallback int) int {
@@ -805,9 +790,7 @@ func (m *Model) updateViewportDimensions() {
 	headerHeight := lipgloss.Height(header)
 
 	// Calculate hints height.
-	hints := m.theme.KeyHint.Render(
-		"enter: submit  ·  ctrl+t: thinking  ·  ctrl+w: switch  ·  ctrl+c: quit",
-	)
+	hints := m.theme.KeyHint.Render(thinkingHint(m.showThinking))
 	hintsHeight := lipgloss.Height(hints)
 
 	// Calculate input height.
