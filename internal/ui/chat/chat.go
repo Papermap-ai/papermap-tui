@@ -12,6 +12,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/theme"
 	"github.com/papermap/papermap-tui/internal/ui/components"
+	"github.com/papermap/papermap-tui/internal/ui/components/toast"
 )
 
 type SubmitMsg struct {
@@ -103,6 +104,14 @@ type Model struct {
 	// whenever the textarea is cleared (submit, ctrl+l, conversation
 	// load) so chip ids never bleed across prompts.
 	pastes pasteRegistry
+	// selection tracks the in-progress mouse drag over the transcript
+	// viewport. Cleared on release after copying to the clipboard, on
+	// escape, and whenever the transcript is rebuilt under a live drag.
+	sel selection
+	// toast renders a transient bottom-right confirmation pill (e.g.
+	// "Copied"). Owned by chat so the rest of the app doesn't have to
+	// know about clipboard plumbing.
+	toast toast.Model
 }
 
 func NewModel(th theme.Theme) Model {
@@ -168,6 +177,12 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Toast dismissal ticks are routed first so a stale dismiss never
+	// races with other handlers. The toast Update is a no-op for any
+	// non-dismiss msg, so this is safe to call unconditionally.
+	if m.toast.Update(msg) {
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -197,6 +212,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		if len(m.messages) > 0 {
+			handled, selCmd := m.handleSelectionMouse(msg)
+			if handled {
+				return m, selCmd
+			}
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
 			m.noteUserScroll()
@@ -224,6 +243,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		key := msg.String()
+
+		// Escape always clears any active transcript selection so users
+		// can dismiss a stuck highlight without copying. Done before
+		// any other key handling so esc never falls through to a
+		// scroll/menu binding while a selection is on screen.
+		if key == "esc" && (m.sel.active || m.sel.cursorLine != m.sel.anchorLine || m.sel.cursorCol != m.sel.anchorCol) {
+			m.clearSelection()
+			return m, nil
+		}
 
 		// Scroll keys should always work, even while streaming. Arrow-based
 		// bindings use Shift to avoid conflicting with textarea cursor nav.
@@ -805,8 +833,20 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	workspaceLine := th.Title.Render("Workspace: " + workspace)
 	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
 
-	// Key hints.
+	// Key hints, with the toast pinned to the bottom-right corner of
+	// the same row when one is live. Splicing them into a single line
+	// keeps the layout height stable so showing/hiding a toast never
+	// reflows the viewport.
 	hints := th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
+	if t := m.toast.View(th); t != "" {
+		hintsWidth := lipgloss.Width(hints)
+		toastWidth := lipgloss.Width(t)
+		gap := width - hintsWidth - toastWidth - 4
+		if gap < 1 {
+			gap = 1
+		}
+		hints = hints + strings.Repeat(" ", gap) + t
+	}
 
 	// Input area.
 	inputView := m.renderInput(th)
@@ -1064,6 +1104,34 @@ func (m *Model) syncViewportContent() {
 	contentWidth := m.width - 4
 	transcript := m.transcriptView(m.theme, contentWidth)
 	m.viewport.SetContent(transcript)
+	// Keep the selection's stripped-content cache in lockstep with the
+	// viewport so byteRange / selectedText stay correct across stream
+	// updates that arrive mid-drag. We always refresh, not just when a
+	// selection is active, so a fresh click after a stream finishes
+	// picks up the latest content immediately.
+	m.sel.rememberTranscript(stripContent(transcript))
+	m.refreshSelectionHighlight()
+}
+
+// refreshSelectionHighlight reapplies (or clears) the viewport
+// highlight to reflect the current selection state. Safe to call
+// after every transcript rebuild; empty selections clear so a
+// stale highlight never lingers.
+func (m *Model) refreshSelectionHighlight() {
+	start, end, ok := m.sel.byteRange()
+	if !ok {
+		m.viewport.ClearHighlights()
+		return
+	}
+	m.viewport.SetHighlights([][]int{{start, end}})
+}
+
+// clearSelection wipes selection state and removes any active
+// highlight from the viewport. Used by escape and after a successful
+// copy so the highlight doesn't linger after the action completes.
+func (m *Model) clearSelection() {
+	m.sel.reset()
+	m.viewport.ClearHighlights()
 }
 
 // renderInput composes the prompt input box: the textarea padded to its
@@ -1146,4 +1214,154 @@ func truncateBadge(label, slug string, width int) string {
 		}
 	}
 	return "…"
+}
+
+// viewportScreenOrigin returns the (x, y) screen coordinates of the
+// viewport's top-left cell, accounting for the wrapping app padding
+// (theme.App applies Padding(1, 2)) and the chat header's two rows
+// plus the blank separator row above the viewport. Returns ok=false
+// when the chat is in its empty state (no viewport on screen).
+func (m Model) viewportScreenOrigin() (x, y int, ok bool) {
+	if len(m.messages) == 0 {
+		return 0, 0, false
+	}
+	// theme.App padding: 1 row top, 2 cols left.
+	const appPaddingTop = 1
+	const appPaddingLeft = 2
+	logoLine := components.SmallRender(m.theme, m.width-4)
+	workspaceLine := m.theme.Title.Render("Workspace: " + "Unified Workspace")
+	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
+	headerHeight := lipgloss.Height(header)
+	// Layout in activeView: header, "", viewport, ...
+	return appPaddingLeft, appPaddingTop + headerHeight + 1, true
+}
+
+// screenToContent maps a terminal mouse cell (mouseX, mouseY) into a
+// transcript content (line, col) coordinate. Returns ok=false when the
+// click falls outside the viewport rectangle so callers can let the
+// event flow elsewhere (textarea, scrollbar, etc.). The returned
+// column is clamped against the visible viewport width but not against
+// the actual line length: byteRange enforces the per-line clamp via
+// lineColToByte.
+func (m Model) screenToContent(mouseX, mouseY int) (line, col int, ok bool) {
+	originX, originY, originOK := m.viewportScreenOrigin()
+	if !originOK {
+		return 0, 0, false
+	}
+	relY := mouseY - originY
+	relX := mouseX - originX
+	if relY < 0 || relY >= m.viewport.Height() {
+		return 0, 0, false
+	}
+	if relX < 0 {
+		relX = 0
+	}
+	line = relY + m.viewport.YOffset()
+	col = relX
+	return line, col, true
+}
+
+// handleSelectionMouse routes a mouse event through the in-app
+// transcript selection state machine. Returns handled=true when the
+// event was consumed (so the caller skips the viewport's own Update
+// for that event). The returned cmd carries any tea.SetClipboard
+// triggered by a release that completed a non-empty selection.
+//
+// State transitions:
+//   - Left click inside viewport: anchor selection, clear previous.
+//   - Motion with left button held: extend selection cursor.
+//   - Left release: copy substring (if non-empty) and clear state.
+//
+// Wheel events and clicks outside the viewport are not consumed so
+// the existing scroll path stays intact.
+func (m *Model) handleSelectionMouse(msg tea.Msg) (handled bool, cmd tea.Cmd) {
+	switch e := msg.(type) {
+	case tea.MouseClickMsg:
+		if e.Button != tea.MouseLeft {
+			return false, nil
+		}
+		line, col, ok := m.screenToContent(e.X, e.Y)
+		if !ok {
+			return false, nil
+		}
+		m.sel.active = true
+		m.sel.anchorLine, m.sel.anchorCol = line, col
+		m.sel.cursorLine, m.sel.cursorCol = line, col
+		m.refreshSelectionHighlight()
+		return true, nil
+
+	case tea.MouseMotionMsg:
+		if !m.sel.active {
+			return false, nil
+		}
+		// Only extend while the left button is being held. Bubble Tea
+		// reports the held button via the Button field on motion msgs.
+		if e.Button != tea.MouseLeft {
+			return false, nil
+		}
+		line, col, ok := m.screenToContent(e.X, e.Y)
+		if !ok {
+			// Drag wandered out of the viewport: clamp to the nearest
+			// edge instead of dropping the event so cross-viewport
+			// drags still extend the selection sensibly.
+			line, col = m.clampToViewport(e.X, e.Y)
+		}
+		m.sel.cursorLine, m.sel.cursorCol = line, col
+		m.refreshSelectionHighlight()
+		return true, nil
+
+	case tea.MouseReleaseMsg:
+		_ = e
+		if !m.sel.active {
+			return false, nil
+		}
+		// Release events report MouseNone (xterm SGR doesn't preserve
+		// the released-button identity in basic mode), so we don't
+		// filter on Button here. The active flag is enough — only a
+		// drag we started owns this release.
+		text := m.sel.selectedText()
+		m.clearSelection()
+		text = strings.TrimRight(text, "\n")
+		if text == "" {
+			return true, nil
+		}
+		toastCmd := m.toast.Show("Copied", toast.KindSuccess, 0)
+		return true, tea.Batch(tea.SetClipboard(text), toastCmd)
+	}
+	return false, nil
+}
+
+// clampToViewport projects an out-of-bounds drag point onto the
+// nearest viewport edge so cross-viewport drags still produce a
+// sensible selection cursor. Returns content-space (line, col).
+func (m Model) clampToViewport(mouseX, mouseY int) (line, col int) {
+	originX, originY, ok := m.viewportScreenOrigin()
+	if !ok {
+		return 0, 0
+	}
+	relY := mouseY - originY
+	relX := mouseX - originX
+	if relY < 0 {
+		relY = 0
+	}
+	if vh := m.viewport.Height(); relY >= vh {
+		relY = vh - 1
+	}
+	if relX < 0 {
+		relX = 0
+	}
+	return relY + m.viewport.YOffset(), relX
+}
+
+// SelectionActive reports whether a selection is currently being
+// dragged. Test seam used by selection-geometry tests.
+func (m Model) SelectionActive() bool {
+	return m.sel.active
+}
+
+// SelectedText returns the text currently covered by the selection
+// (ANSI-stripped, normalized to LF). Empty when no selection is live.
+// Test seam.
+func (m Model) SelectedText() string {
+	return m.sel.selectedText()
 }
