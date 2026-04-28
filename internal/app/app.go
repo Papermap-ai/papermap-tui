@@ -255,6 +255,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWindowSize(msg)
 	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m.forwardChatIfActive(msg)
+	case tea.PasteMsg:
+		// Bracketed-paste content is meaningful only inside the chat
+		// textarea today. Forward it so the chat model's paste handler
+		// can collapse large blobs into chips.
+		return m.forwardChatIfActive(msg)
 	case workspacesLoadedMsg:
 		return m.handleWorkspacesLoaded(msg), nil
 	case workspace.SelectMsg:
