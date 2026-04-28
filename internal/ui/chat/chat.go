@@ -99,6 +99,10 @@ type Model struct {
 	// shown as a badge pinned bottom-left inside the input box. Empty
 	// hides the badge row entirely.
 	selectedModel string
+	// pastes tracks every collapsed paste in the current draft. Reset
+	// whenever the textarea is cleared (submit, ctrl+l, conversation
+	// load) so chip ids never bleed across prompts.
+	pastes pasteRegistry
 }
 
 func NewModel(th theme.Theme) Model {
@@ -108,7 +112,7 @@ func NewModel(th theme.Theme) Model {
 	ta.Focus()
 
 	ta.Prompt = ""
-	ta.SetWidth(30)
+	ta.SetWidth(25)
 	ta.SetHeight(2)
 	ta.MaxHeight = 5
 	ta.MinHeight = 3
@@ -152,6 +156,7 @@ func NewModel(th theme.Theme) Model {
 		activeResponse: -1,
 		theme:          th,
 		showThinking:   true,
+		pastes:         newPasteRegistry(),
 	}
 }
 
@@ -199,6 +204,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, vpCmd
 			}
 		}
+
+	case tea.PasteMsg:
+		// Large pastes collapse into a "[Pasted ~N lines]" chip so the
+		// prompt stays readable. The token stored in the textarea is
+		// expanded back to the original text on submit.
+		text := msg.Content
+		if shouldCollapsePaste(text) {
+			token, _ := m.pastes.add(text)
+			m.textarea.InsertString(token)
+			if h := m.textarea.Height(); h != m.lastTAHeight {
+				m.lastTAHeight = h
+				m.updateViewportDimensions()
+			}
+			m.syncViewportContent()
+			return m, nil
+		}
+		// Small pastes flow through to the textarea unchanged.
 
 	case tea.KeyPressMsg:
 		key := msg.String()
@@ -251,6 +273,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// older terminals and tmux without extended-keys.
 		if key == "ctrl+l" {
 			m.textarea.Reset()
+			m.pastes.reset()
 			m.err = ""
 			m.updateViewportDimensions()
 			m.syncViewportContent()
@@ -262,18 +285,48 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.streaming {
 				return m, nil
 			}
-			prompt := strings.TrimSpace(m.textarea.Value())
-			if prompt == "" {
+			raw := m.textarea.Value()
+			expanded := strings.TrimSpace(m.pastes.expand(raw))
+			if expanded == "" {
 				m.err = "Enter a question to continue."
 				m.updateViewportDimensions()
 				m.syncViewportContent()
 				return m, nil
 			}
-			m.beginRequest(prompt)
+			m.beginRequest(expanded)
 			return m, tea.Batch(
-				func() tea.Msg { return SubmitMsg{Prompt: prompt} },
+				func() tea.Msg { return SubmitMsg{Prompt: expanded} },
 				m.spinner.Tick,
 			)
+		}
+
+		// Backspace immediately after a chip token deletes the whole
+		// chip in one keystroke instead of nibbling the synthetic
+		// "[#p:N]" sequence character by character.
+		if key == "backspace" {
+			value := m.textarea.Value()
+			byteOffset := cursorByteOffset(value, m.textarea.Line(), m.textarea.Column())
+			if chip, start, end, ok := m.pastes.chipBeforeCursor(value, byteOffset); ok {
+				// Rebuild the buffer in two steps so the cursor lands
+				// at the chip's old start position. SetValue resets
+				// the cursor to end-of-content, so we set the prefix
+				// first (cursor at end of prefix == old start) and
+				// then InsertString the suffix without moving the
+				// cursor past it would land us at end again — instead
+				// we splice via a single SetValue and then walk the
+				// cursor back to the prefix end.
+				prefix := value[:start]
+				suffix := value[end:]
+				m.textarea.SetValue(prefix + suffix)
+				m.pastes.remove(chip.id)
+				placeCursorAtRuneOffset(&m.textarea, prefix+suffix, utf8Len(prefix))
+				if h := m.textarea.Height(); h != m.lastTAHeight {
+					m.lastTAHeight = h
+					m.updateViewportDimensions()
+				}
+				m.syncViewportContent()
+				return m, nil
+			}
 		}
 	}
 
@@ -508,6 +561,7 @@ func (m *Model) ReplaceLastAssistant(messages []Message) {
 
 func (m *Model) Clear() {
 	m.textarea.Reset()
+	m.pastes.reset()
 	m.messages = nil
 	m.streaming = false
 	m.streamStatus = ""
@@ -588,6 +642,7 @@ func (m Model) IsStreaming() bool {
 // an existing chat with no prior turns.
 func (m *Model) LoadConversation(chatID string, messages []Message) {
 	m.textarea.Reset()
+	m.pastes.reset()
 	m.streaming = false
 	m.streamStatus = ""
 	m.err = ""
@@ -777,6 +832,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 func (m *Model) beginRequest(prompt string) {
 	m.err = ""
 	m.textarea.Reset()
+	m.pastes.reset()
 	m.streaming = true
 	m.userScrolled = false
 	m.messages = append(m.messages,
@@ -1019,7 +1075,7 @@ func (m *Model) syncViewportContent() {
 func (m Model) renderInput(th theme.Theme) string {
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
 	width := m.textarea.Width()
-	body := m.textarea.View()
+	body := m.pastes.decorate(m.textarea.View(), th)
 	if badge := m.renderModelBadge(th, width); badge != "" {
 		body = body + "\n" + badge
 	}
