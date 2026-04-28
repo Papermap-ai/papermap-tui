@@ -59,9 +59,9 @@ func (s selection) isEmpty() bool {
 
 // byteRange computes the [start, end) byte offsets into the cached
 // transcript for the current selection. Returns ok=false when the
-// selection is empty or the transcript is unavailable. The returned
-// range is suitable for viewport.SetHighlights, which expects byte
-// offsets in regexp.FindAllStringIndex form.
+// selection is empty or the transcript is unavailable. Used by
+// selectedText to slice the clipboard payload; not used for rendering
+// the on-screen highlight (see applyHighlight in highlight.go).
 func (s selection) byteRange() (start, end int, ok bool) {
 	if s.transcript == "" || s.isEmpty() {
 		return 0, 0, false
@@ -79,6 +79,12 @@ func (s selection) byteRange() (start, end int, ok bool) {
 // by the selection, normalized to LF line endings. Empty selections
 // return "". Callers should not invoke this while the transcript is
 // being rebuilt.
+//
+// TODO: lineColToByte treats col as a rune index but orderedBounds
+// returns grapheme-cell columns. For ASCII content these agree; for
+// wide characters (CJK, emoji) the clipboard slice will be off by
+// the cell-vs-rune delta. Fix by walking the same uv.Buffer cells
+// applyHighlight uses and joining cell.Content directly.
 func (s selection) selectedText() string {
 	start, end, ok := s.byteRange()
 	if !ok {

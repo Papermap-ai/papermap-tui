@@ -3,12 +3,13 @@
 //
 // A toast is a presentational sub-model: callers store a Model on their
 // root model, drive it with Show / Update, and place its rendered View
-// onto the existing layer (typically pinned to a corner). Dismissal is
-// driven by a tea.Cmd that fires after the configured duration; no
+// into the layout (typically swapped in for the hints row). Dismissal
+// is driven by a tea.Cmd that fires after the configured duration; no
 // global timers, no background goroutines.
 package toast
 
 import (
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,8 +23,8 @@ import (
 // enough for a glance, matching the original product spec.
 const DefaultDuration = 1500 * time.Millisecond
 
-// Kind selects a visual variant. Success uses the brand accent;
-// Info uses a muted style. Failure variants can be added later.
+// Kind selects a visual variant. Success uses the brand accent; Info
+// uses a muted style. Failure variants can be added later.
 type Kind int
 
 const (
@@ -93,23 +94,45 @@ func (m Model) Visible() bool {
 	return m.live && m.text != ""
 }
 
-// View renders the toast as a compact pill. Returns "" when no toast
-// is live so callers can unconditionally embed the result without
-// reserving layout space.
-func (m Model) View(th theme.Theme) string {
-	if !m.Visible() {
+// View renders the toast as a full-width banner: a bold accent badge
+// followed by the message body on a softer band of the same hue. Width
+// is the available column count; the banner expands to fill it so it
+// reads as a status bar rather than a floating chip. Returns "" when
+// no toast is live.
+func (m Model) View(th theme.Theme, width int) string {
+	if !m.Visible() || width <= 0 {
 		return ""
 	}
-	style := lipgloss.NewStyle().
-		Bold(true).
-		Padding(0, 2).
-		Background(th.InputBg).
-		Foreground(th.TextColor)
+	var (
+		badgeText string
+		badgeBg   = th.LogoColorA
+		badgeFg   = th.InputBg
+		bodyBg    = th.LogoColorB
+		bodyFg    = th.InputBg
+	)
 	switch m.kind {
 	case KindSuccess:
-		style = style.Foreground(th.LogoColorA)
+		badgeText = "OKAY!"
 	case KindInfo:
-		style = style.Foreground(th.MutedColor)
+		badgeText = "INFO"
+		badgeBg = th.MutedColor
+		bodyBg = th.ButtonBgInactive
+		bodyFg = th.TextColor
 	}
-	return style.Render(m.text)
+	badge := lipgloss.NewStyle().
+		Bold(true).
+		Padding(0, 2).
+		Background(badgeBg).
+		Foreground(badgeFg).
+		Render(badgeText)
+	body := " " + m.text
+	used := lipgloss.Width(badge) + lipgloss.Width(body)
+	if used < width {
+		body += strings.Repeat(" ", width-used)
+	}
+	bodyStyled := lipgloss.NewStyle().
+		Background(bodyBg).
+		Foreground(bodyFg).
+		Render(body)
+	return badge + bodyStyled
 }

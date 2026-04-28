@@ -153,6 +153,9 @@ func NewModel(th theme.Theme) Model {
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 3
+	// Selection highlighting is applied at transcript-render time via
+	// paintSelection (see syncViewportContent). The bubbles
+	// viewport SetHighlights pipeline is intentionally bypassed.
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -833,25 +836,20 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 	workspaceLine := th.Title.Render("Workspace: " + workspace)
 	header := lipgloss.JoinVertical(lipgloss.Right, logoLine, workspaceLine)
 
-	// Key hints, with the toast pinned to the bottom-right corner of
-	// the same row when one is live. Splicing them into a single line
-	// keeps the layout height stable so showing/hiding a toast never
-	// reflows the viewport.
-	hints := th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
-	if t := m.toast.View(th); t != "" {
-		hintsWidth := lipgloss.Width(hints)
-		toastWidth := lipgloss.Width(t)
-		gap := width - hintsWidth - toastWidth - 4
-		if gap < 1 {
-			gap = 1
-		}
-		hints = hints + strings.Repeat(" ", gap) + t
+	// Bottom row: toast banner takes over the hints row while a toast
+	// is live, then the hints return when the dismiss tick fires. Both
+	// are exactly one line, so the swap doesn't reflow the viewport.
+	var bottom string
+	if t := m.toast.View(th, width); t != "" {
+		bottom = t
+	} else {
+		bottom = th.KeyHint.Render(thinkingHint(m.showThinking, m.streaming))
 	}
 
 	// Input area.
 	inputView := m.renderInput(th)
 
-	// Assemble: header, viewport, input, error (if any), hints.
+	// Assemble: header, viewport, input, error (if any), bottom row.
 	sections := []string{
 		header,
 		"",
@@ -864,7 +862,7 @@ func (m Model) activeView(th theme.Theme, workspace string, width int) string {
 		sections = append(sections, "", th.Error.Render(m.err))
 	}
 
-	sections = append(sections, "", hints)
+	sections = append(sections, "", bottom)
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
@@ -1103,35 +1101,47 @@ func (m *Model) syncViewportContent() {
 	}
 	contentWidth := m.width - 4
 	transcript := m.transcriptView(m.theme, contentWidth)
-	m.viewport.SetContent(transcript)
 	// Keep the selection's stripped-content cache in lockstep with the
-	// viewport so byteRange / selectedText stay correct across stream
-	// updates that arrive mid-drag. We always refresh, not just when a
-	// selection is active, so a fresh click after a stream finishes
-	// picks up the latest content immediately.
+	// viewport so selectedText stays correct across stream updates that
+	// arrive mid-drag. We always refresh, not just when a selection is
+	// active, so a fresh click after a stream finishes picks up the
+	// latest content immediately.
 	m.sel.rememberTranscript(stripContent(transcript))
-	m.refreshSelectionHighlight()
+	display := m.paintSelection(transcript, contentWidth)
+	m.viewport.SetContent(display)
 }
 
-// refreshSelectionHighlight reapplies (or clears) the viewport
-// highlight to reflect the current selection state. Safe to call
-// after every transcript rebuild; empty selections clear so a
-// stale highlight never lingers.
-func (m *Model) refreshSelectionHighlight() {
-	start, end, ok := m.sel.byteRange()
-	if !ok {
-		m.viewport.ClearHighlights()
-		return
+// paintSelection returns transcript with the active selection
+// painted via theme.Selection. Returns transcript unchanged when the
+// selection is empty or the viewport is not yet sized. Pre-styling the
+// content avoids the bubbles viewport SetHighlights pipeline, which
+// emits empty styled spans on certain content shapes and leaves the
+// highlight visually invisible.
+func (m *Model) paintSelection(transcript string, contentWidth int) string {
+	if m.sel.isEmpty() {
+		return transcript
 	}
-	m.viewport.SetHighlights([][]int{{start, end}})
+	startLine, startCol, endLine, endCol := m.sel.orderedBounds()
+	height := strings.Count(transcript, "\n") + 1
+	return applyHighlight(
+		transcript,
+		contentWidth,
+		height,
+		startLine,
+		startCol,
+		endLine,
+		endCol,
+		m.theme.Selection,
+	)
 }
 
-// clearSelection wipes selection state and removes any active
-// highlight from the viewport. Used by escape and after a successful
-// copy so the highlight doesn't linger after the action completes.
+// clearSelection wipes selection state and re-syncs the viewport so
+// the freshly-rendered transcript drops the highlight. Used by escape
+// and after a successful copy so the highlight doesn't linger after
+// the action completes.
 func (m *Model) clearSelection() {
 	m.sel.reset()
-	m.viewport.ClearHighlights()
+	m.syncViewportContent()
 }
 
 // renderInput composes the prompt input box: the textarea padded to its
@@ -1287,7 +1297,7 @@ func (m *Model) handleSelectionMouse(msg tea.Msg) (handled bool, cmd tea.Cmd) {
 		m.sel.active = true
 		m.sel.anchorLine, m.sel.anchorCol = line, col
 		m.sel.cursorLine, m.sel.cursorCol = line, col
-		m.refreshSelectionHighlight()
+		m.syncViewportContent()
 		return true, nil
 
 	case tea.MouseMotionMsg:
@@ -1307,7 +1317,7 @@ func (m *Model) handleSelectionMouse(msg tea.Msg) (handled bool, cmd tea.Cmd) {
 			line, col = m.clampToViewport(e.X, e.Y)
 		}
 		m.sel.cursorLine, m.sel.cursorCol = line, col
-		m.refreshSelectionHighlight()
+		m.syncViewportContent()
 		return true, nil
 
 	case tea.MouseReleaseMsg:
@@ -1325,7 +1335,7 @@ func (m *Model) handleSelectionMouse(msg tea.Msg) (handled bool, cmd tea.Cmd) {
 		if text == "" {
 			return true, nil
 		}
-		toastCmd := m.toast.Show("Copied", toast.KindSuccess, 0)
+		toastCmd := m.toast.Show("Selected text copied to clipboard", toast.KindSuccess, 0)
 		return true, tea.Batch(tea.SetClipboard(text), toastCmd)
 	}
 	return false, nil
