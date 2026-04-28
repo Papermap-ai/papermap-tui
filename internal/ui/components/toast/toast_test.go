@@ -25,7 +25,7 @@ func TestShowMakesToastVisible(t *testing.T) {
 	if !m.Visible() {
 		t.Fatal("toast should be visible after Show")
 	}
-	if v := m.View(theme.Default()); v == "" {
+	if v := m.View(theme.Default(), 80); v == "" {
 		t.Fatal("View should render non-empty text while visible")
 	}
 }
@@ -44,7 +44,7 @@ func TestDismissTickHidesToast(t *testing.T) {
 	if m.Visible() {
 		t.Fatal("toast should be hidden after dismiss tick")
 	}
-	if v := m.View(theme.Default()); v != "" {
+	if v := m.View(theme.Default(), 80); v != "" {
 		t.Fatalf("View should be empty after dismiss, got %q", v)
 	}
 }

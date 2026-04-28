@@ -23,6 +23,14 @@ type Theme struct {
 	// the chat transcript when an assistant turn fails or is cancelled.
 	ErrorBadge lipgloss.Style
 	Accent     lipgloss.Style
+	// Selection is the visual style applied to mouse-dragged transcript
+	// highlights: a warm amber background with dark ink text on top so
+	// the selected region reads as a contiguous swept-highlighter block
+	// regardless of any pre-existing ANSI styling underneath it. When a
+	// light theme variant lands, swap the amber for a deeper amber
+	// (e.g. #E8A317) with white fg so the band stays readable on a
+	// pale background.
+	Selection lipgloss.Style
 	// InputAccent is a softer accent reserved for the prompt input bar so
 	// it reads as distinct from assistant message accents.
 	InputAccent lipgloss.Style
@@ -77,6 +85,9 @@ func Default() Theme {
 		Accent: lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true),
+		Selection: lipgloss.NewStyle().
+			Background(lipgloss.Color("#FFD86B")).
+			Foreground(inputBg),
 		InputAccent: lipgloss.NewStyle().
 			Foreground(soft).
 			Bold(true),

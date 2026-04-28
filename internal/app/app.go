@@ -314,7 +314,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 	}
-	return m, nil
+	// Default: forward unknown messages to the chat model when the chat
+	// screen is active. This lets chat-side components (toast dismiss
+	// ticks, future bubbles) deliver their messages without each one
+	// needing an explicit case here. chat.Update is a no-op for any
+	// message type it doesn't recognize.
+	return m.forwardChatIfActive(msg)
 }
 
 func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
