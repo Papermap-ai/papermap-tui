@@ -22,6 +22,7 @@
 - [x] Add an ability to cancel requests when the thinknig is happening.
 - [x] Add an ability to change the model that the user is working with on papermap
 - [ ] Figure out how to add new workspaces from the UI
+- [ ] add copying and pasting ability to the UI
 - [ ] Figure out how to run shell commands in the chat
 
 
