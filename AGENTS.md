@@ -11,13 +11,6 @@ insights -> see streamed results`
 The MVP should stay narrow. Prefer the smallest end-to-end flow that works
 well over broader feature coverage.
 
-## Current Status
-
-The MVP scope is implemented end-to-end. Authentication runs as CLI
-subcommands (`papermap auth login | logout | whoami`) outside the Bubble
-Tea program. Launching `papermap` lands directly in the unified workspace
-when a session exists, otherwise it prints a sign-in prompt and exits.
-
 When making architecture decisions, align with the MVP scope:
 
 - Authentication via `papermap auth` CLI subcommands (huh-based prompts).
@@ -33,7 +26,7 @@ requested.
 ## Module And Stack
 
 - Module path: `github.com/papermap/papermap-tui`.
-- Language: Go 1.26+.
+- Language: Go (see `go.mod` for the pinned version).
 - UI framework: `charm.land/bubbletea/v2`.
 - Forms / prompts: `charm.land/huh/v2` (used by the `auth` CLI).
 - Styling: `charm.land/lipgloss/v2`.
@@ -97,20 +90,9 @@ Any work inside `internal/ui` must also follow `internal/ui/AGENTS.md`.
 
 ## Backend Integration
 
-Prefer existing Papermap backend routes over inventing new flows.
-
-The MVP plan assumes these existing backend capabilities:
-
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/refresh`
-- `POST /api/v1/auth/logout`
-- `GET /api/v1/users/me`
-- `GET /api/v1/analytics/workspaces/unified`
-- `GET /api/v1/analytics/workspaces/paginate`
-- `GET /api/v1/analytics/workspaces/{id}`
-- `POST /api/v1/analytics/charts/stream`
-- `POST /api/v1/analytics/requests/stream`
-- `GET /api/v1/analytics/chats/{id}/conversations`
+Prefer existing Papermap backend routes over inventing new flows. The
+backend repo (and its OpenAPI spec) is the source of truth for available
+endpoints.
 
 Before introducing backend changes, verify that the needed behavior is truly
 missing.
@@ -124,7 +106,7 @@ Configuration is loaded from, in precedence order:
 1. `--api-url` flag (root or `auth login`).
 2. `PAPERMAP_API_URL` environment variable.
 3. `~/.papermap/config.yaml`.
-4. Built-in default (`https://dataapi.papermap.ai`).
+4. Built-in default (see `internal/config`).
 
 Cached workspace metadata lives in `~/.papermap/workspaces.json` and is
 cleared on logout.
@@ -188,14 +170,15 @@ Common commands:
 - Run: `make run`
 - Test: `make test` (race + count=1)
 - Format: `make fmt` (gofumpt + goimports)
-- Lint: `make lint` (golangci-lint v2)
+- Lint: `make lint` (golangci-lint)
 - Install git hooks: `make hooks`
 - Snapshot release: `make release-snapshot`
 - Clean: `make clean`
 
 The pre-commit hook runs `make lint`, so local commits will fail if lint
-fails. CI runs lint, test (ubuntu + macOS), and build on every push and PR
-to `main`.
+fails. Linting is enforced locally only; CI does not run it. CI runs test
+and build on macOS on every push and PR to `main`. Ubuntu is temporarily
+disabled while all current testers are on macOS.
 
 Distribution paths:
 
