@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.2.0...v0.3.0) (2026-04-29)
+
+
+### Features
+
+* add LLM model picker with TAB cycle and persisted selection ([e11bd15](https://github.com/Papermap-ai/papermap-tui/commit/e11bd151303f511f29e57f62c88dcbc10b65c42f))
+* **chat:** breathe trace and visualizations apart from body ([2068415](https://github.com/Papermap-ai/papermap-tui/commit/206841544b630a3deace1c94ebb72855a10f819b))
+* **chat:** cancel in-flight insights with inline error rendering ([f3645d0](https://github.com/Papermap-ai/papermap-tui/commit/f3645d0a0446de6ff1583ee7227c4aab0944c0fd))
+* **chat:** collapse large pastes into removable chips ([fad5d75](https://github.com/Papermap-ai/papermap-tui/commit/fad5d75ee13bd6f12d109d698536cf3e5c2f4e1c))
+* **chat:** conversation history with command palette ([d34b0cf](https://github.com/Papermap-ai/papermap-tui/commit/d34b0cf461e819cedadad3a8b265a40137cbb119))
+* **chat:** ctrl+l clears prompt textarea ([17f8e12](https://github.com/Papermap-ai/papermap-tui/commit/17f8e125259c60dfe433812c4ece3d24a068da68))
+* **chat:** drag-to-select transcript with OSC52 copy + toast ([e58a101](https://github.com/Papermap-ai/papermap-tui/commit/e58a101414229db5164a75f6f8508554303f4e7d))
+* **chat:** paint selection via cell buffer + banner toast ([a249212](https://github.com/Papermap-ai/papermap-tui/commit/a2492125f2842d03f46e70992f99bf48d47077f9))
+* **chat:** sticky thinking toggle with muted streaming preview ([c7eb02f](https://github.com/Papermap-ai/papermap-tui/commit/c7eb02ff21ce834e9aedf67e7f864efa6a9ee3b8))
+
+
+### Bug Fixes
+
+* **chat:** show conversations overlay on Ctrl+P ([5b9b351](https://github.com/Papermap-ai/papermap-tui/commit/5b9b3518db8ca288e0cb02edb4b86ff5d1f094f3))
+* **chat:** show conversations overlay on Ctrl+P ([12ee33f](https://github.com/Papermap-ai/papermap-tui/commit/12ee33f868e9ec170c784b758485a56d6d3506ce))
+
+
+### Documentation
+
+* update tagline to Papermap Data Platform ([72c446b](https://github.com/Papermap-ai/papermap-tui/commit/72c446b3a6376eff1e7bd0e9040589c4cfd94b41))
+
 ## [0.2.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.1.1...v0.2.0) (2026-04-24)
 
 
