@@ -255,6 +255,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWindowSize(msg)
 	case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		return m.forwardChatIfActive(msg)
+	case tea.PasteMsg:
+		// Bracketed-paste content is meaningful only inside the chat
+		// textarea today. Forward it so the chat model's paste handler
+		// can collapse large blobs into chips.
+		return m.forwardChatIfActive(msg)
 	case workspacesLoadedMsg:
 		return m.handleWorkspacesLoaded(msg), nil
 	case workspace.SelectMsg:
@@ -309,7 +314,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 	}
-	return m, nil
+	// Default: forward unknown messages to the chat model when the chat
+	// screen is active. This lets chat-side components (toast dismiss
+	// ticks, future bubbles) deliver their messages without each one
+	// needing an explicit case here. chat.Update is a no-op for any
+	// message type it doesn't recognize.
+	return m.forwardChatIfActive(msg)
 }
 
 func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
