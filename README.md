@@ -102,22 +102,36 @@ papermap [flags] [command]
 
 ### Keyboard controls
 
-| Key       | Action                                  |
-| --------- | --------------------------------------- |
-| `Enter`   | Submit prompt / confirm                 |
-| `Tab`     | Switch focus inside forms               |
-| `Ctrl+W`  | Switch workspace                        |
-| `Ctrl+L`  | Clear chat                              |
-| `Esc`     | Cancel / go back                        |
-| `Ctrl+C`  | Quit (with confirmation)                |
+| Key              | Action                                  |
+| ---------------- | --------------------------------------- |
+| `Enter`          | Submit prompt / confirm                 |
+| `Tab`            | Switch focus inside forms               |
+| `Ctrl+W`         | Switch workspace                        |
+| `Ctrl+L`         | Clear chat                              |
+| `Esc`            | Cancel / go back                        |
+| `Ctrl+C`         | Quit (with confirmation)                |
+| `!` (line start) | Run a one-shot shell command            |
+
+### Shell mode
+
+Type `!` at the start of an empty prompt to switch to shell mode, then
+type the command and hit `Enter` to run it. Output is captured into the
+transcript; `Esc` cancels an in-flight command. Each invocation is a
+fresh one-shot — there is no persistent shell session.
+
+The shell binary is resolved at TUI startup. On macOS and Linux it
+honors `$SHELL` (falling back to `/bin/sh`). On Windows it defaults to
+PowerShell 7 (`pwsh.exe`); see [Windows shell selection](#windows-shell-selection)
+to opt into `cmd.exe` instead.
 
 ## Configuration
 
 Configuration is loaded from `~/.papermap/config.yaml`. Environment variables take precedence.
 
-| Setting   | Config key | Env var             | Default                            |
-| --------- | ---------- | ------------------- | ---------------------------------- |
-| API URL   | `api_url`  | `PAPERMAP_API_URL`  | `https://dataapi.papermap.ai`  |
+| Setting       | Config key       | Env var             | Default                            |
+| ------------- | ---------------- | ------------------- | ---------------------------------- |
+| API URL       | `api_url`        | `PAPERMAP_API_URL`  | `https://dataapi.papermap.ai`  |
+| Windows shell | `shell.windows`  | —                   | `pwsh`                             |
 
 Example `~/.papermap/config.yaml`:
 
@@ -132,6 +146,42 @@ papermap --api-url https://dataapi.papermap.ai
 # or
 PAPERMAP_API_URL=https://dataapi.papermap.ai papermap
 ```
+
+### Windows shell selection
+
+On Windows the config file lives at `C:\Users\<name>\.papermap\config.yaml`
+(same `~/.papermap/` layout as macOS and Linux, resolved via
+`%USERPROFILE%`).
+
+`shell.windows` controls which shell `!` mode invokes. Two values are
+supported:
+
+- `pwsh` (default) — PowerShell 7+ (`pwsh.exe`). Resolved by globbing
+  `%ProgramFiles%\PowerShell\<N>\pwsh.exe` and picking the highest
+  installed version.
+- `cmd` — `cmd.exe` from `%SystemRoot%\System32`.
+
+To opt out of PowerShell, drop this in your config:
+
+```yaml
+shell:
+  windows: cmd
+```
+
+If `shell.windows` is `pwsh` (or unset) and `pwsh.exe` cannot be found,
+`papermap` refuses to start with:
+
+```
+papermap: shell.windows is "pwsh" but pwsh.exe was not found under %ProgramFiles%\PowerShell\<N>; install PowerShell 7+ or set shell.windows: cmd
+```
+
+To recover, either install PowerShell 7+
+(<https://github.com/PowerShell/PowerShell/releases>) or set
+`shell.windows: cmd` in the config file above.
+
+The shell is resolved once at TUI startup, so restart `papermap` after
+editing the config. Windows PowerShell 5.1 (`powershell.exe`) is
+intentionally not a supported value — only `pwsh` (7+) and `cmd`.
 
 ## Development
 
