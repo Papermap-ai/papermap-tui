@@ -34,6 +34,11 @@ type Theme struct {
 	// InputAccent is a softer accent reserved for the prompt input bar so
 	// it reads as distinct from assistant message accents.
 	InputAccent lipgloss.Style
+	// ShellAccent is the warm yellow used for the chat input bar and
+	// transcript bar of "!" shell-mode turns. Picked to read as
+	// distinct from both the brand green and the error pink so the
+	// shell mode is unmistakable.
+	ShellAccent lipgloss.Style
 	InputBg     color.Color // Distinct background for the text input area.
 	// MutedColor and TextColor expose the raw palette entries so callers
 	// that style external widgets (textarea, buttons) can match the rest
@@ -90,6 +95,9 @@ func Default() Theme {
 			Foreground(inputBg),
 		InputAccent: lipgloss.NewStyle().
 			Foreground(soft).
+			Bold(true),
+		ShellAccent: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5C16C")).
 			Bold(true),
 		LogoColorA:       accent,
 		LogoColorB:       soft,

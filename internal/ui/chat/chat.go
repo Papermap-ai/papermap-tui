@@ -2,6 +2,7 @@ package chat
 
 import (
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
@@ -14,6 +15,14 @@ import (
 	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/components/toast"
 )
+
+// ShellSubmitMsg is emitted when the chat input is in "!" shell mode
+// and the user presses Enter on a non-empty command. The app layer is
+// responsible for executing the command and returning a follow-up
+// message that AppendShellResult can attach to the transcript.
+type ShellSubmitMsg struct {
+	Command string
+}
 
 type SubmitMsg struct {
 	Prompt string
@@ -43,6 +52,26 @@ type Chart struct {
 	Config api.ChartConfig
 }
 
+// ShellResult is the rendered payload of a transient "!" shell-mode
+// turn. The chat layer attaches it to a Message so the renderer can
+// short-circuit the assistant pipeline and draw a compact command
+// block. Shell turns are intentionally non-persisted: they exist only
+// in the local transcript and are filtered out of any backend payload.
+type ShellResult struct {
+	Command   string
+	Output    string
+	ExitCode  int
+	Duration  time.Duration
+	Truncated bool
+	CapBytes  int
+	// ErrorText surfaces a non-empty error label (e.g. "cancelled",
+	// "output exceeded 256000 bytes") inside the shell block while
+	// keeping the rest of the visual contract identical. Distinct
+	// from Message.Error so shell turns never render as the generic
+	// red ERROR badge.
+	ErrorText string
+}
+
 type Message struct {
 	Role      string
 	Content   string
@@ -50,6 +79,10 @@ type Message struct {
 	Tile      *Tile
 	Chart     *Chart
 	ChartType string
+	// Shell, when non-nil, marks this message as a transient "!"
+	// shell-mode turn. The renderer short-circuits to renderShellBlock
+	// and the message is filtered out of any backend payload.
+	Shell *ShellResult
 	// EmptyData is set when the response had a chart but the data array
 	// was empty. The renderer surfaces a "(no rows)" placeholder in that
 	// case so users see the response landed but had nothing to display.
@@ -104,6 +137,16 @@ type Model struct {
 	// whenever the textarea is cleared (submit, ctrl+l, conversation
 	// load) so chip ids never bleed across prompts.
 	pastes pasteRegistry
+	// shellMode latches the chat input into "!" shell mode: yellow
+	// accent bar, yellow "Shell · enter: runs · esc: exits" badge in
+	// place of the model badge, paste-chip expansion bypassed,
+	// embedded newlines rejected. Cleared on Enter, Esc, or backspace
+	// from an empty buffer.
+	shellMode bool
+	// shellRunning latches while the app layer is executing a shell
+	// command. Submits are refused and the input renders a spinner so
+	// the user has unambiguous feedback that the command is in flight.
+	shellRunning bool
 	// selection tracks the in-progress mouse drag over the transcript
 	// viewport. Cleared on release after copying to the clipboard, on
 	// escape, and whenever the transcript is rebuilt under a live drag.
@@ -316,6 +359,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.streaming {
 				return m, nil
 			}
+			if m.shellMode {
+				return m.submitShell()
+			}
 			raw := m.textarea.Value()
 			expanded := strings.TrimSpace(m.pastes.expand(raw))
 			if expanded == "" {
@@ -329,6 +375,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				func() tea.Msg { return SubmitMsg{Prompt: expanded} },
 				m.spinner.Tick,
 			)
+		}
+
+		// Backspace on an empty buffer exits shell mode without
+		// disturbing any other state. Placed before the chip-delete
+		// path so an empty draft never falls through.
+		if key == "backspace" && m.shellMode && m.textarea.Value() == "" {
+			m.shellMode = false
+			m.refreshTextarea(true)
+			return m, nil
 		}
 
 		// Backspace immediately after a chip token deletes the whole
@@ -666,6 +721,126 @@ func (m Model) IsStreaming() bool {
 	return m.streaming
 }
 
+// SetShellMode toggles the chat input "!" shell mode. When entering
+// shell mode the textarea is left empty so the user starts on a clean
+// command line; the yellow "Shell" badge underneath signals the mode.
+// Existing drafts are only preserved across the transition when
+// on=false (the caller is responsible for guarding entry to non-empty
+// drafts upstream). Calling SetShellMode while a shell command is
+// running is a no-op so the user cannot drop out of the visual state
+// mid-execution.
+func (m *Model) SetShellMode(on bool) {
+	if m.shellRunning {
+		return
+	}
+	if m.shellMode == on {
+		return
+	}
+	m.shellMode = on
+	m.refreshTextarea(true)
+}
+
+// IsShellMode reports whether the chat input is currently latched into
+// "!" shell mode.
+func (m Model) IsShellMode() bool {
+	return m.shellMode
+}
+
+// IsShellRunning reports whether a "!" shell command is currently
+// executing. The app layer uses this to gate Esc handling and to
+// refuse new shell submits.
+func (m Model) IsShellRunning() bool {
+	return m.shellRunning
+}
+
+// SetShellRunning latches the in-flight indicator. The app layer calls
+// SetShellRunning(true) immediately before dispatching the run command
+// and SetShellRunning(false) when the result lands.
+func (m *Model) SetShellRunning(on bool) {
+	if m.shellRunning == on {
+		return
+	}
+	m.shellRunning = on
+	m.refreshTextarea(false)
+}
+
+// AppendShellResult attaches a transient shell-mode turn to the
+// transcript and exits shell mode. The result is rendered as a compact
+// command block; see renderShellBlock for the exact contract.
+func (m *Model) AppendShellResult(res ShellResult) {
+	m.messages = append(m.messages, Message{Role: "shell", Shell: &res})
+	m.shellMode = false
+	m.shellRunning = false
+	m.textarea.Reset()
+	m.pastes.reset()
+	m.refreshAfterMutation()
+}
+
+// CancelShell tears down the shell-mode state when the app layer
+// cancels a running command. Mirrors AppendShellResult minus the
+// transcript append so the user lands back in normal chat mode.
+func (m *Model) CancelShell() {
+	m.shellMode = false
+	m.shellRunning = false
+	m.textarea.Reset()
+	m.pastes.reset()
+	m.refreshAfterMutation()
+}
+
+// submitShell handles Enter while in shell mode. The raw textarea
+// value is treated as a literal command: paste-chip expansion is
+// intentionally bypassed (chips would let a malicious paste smuggle
+// metacharacters past the user's eyes), and embedded newlines are
+// rejected so a multi-line paste cannot turn a single submit into a
+// surprise script.
+func (m *Model) submitShell() (Model, tea.Cmd) {
+	if m.shellRunning {
+		return *m, nil
+	}
+	raw := m.textarea.Value()
+	if strings.ContainsAny(raw, "\n\r") {
+		m.err = "Shell mode runs one line at a time."
+		m.refreshAfterMutation()
+		return *m, nil
+	}
+	cmd := strings.TrimSpace(raw)
+	if cmd == "" {
+		m.shellMode = false
+		m.refreshTextarea(true)
+		return *m, nil
+	}
+	m.err = ""
+	m.shellRunning = true
+	m.refreshTextarea(false)
+	return *m, tea.Batch(
+		func() tea.Msg { return ShellSubmitMsg{Command: cmd} },
+		m.spinner.Tick,
+	)
+}
+
+// refreshTextarea rebuilds the textarea state to reflect the current
+// shell-mode flag. When clearValue is true the buffer is reset so the
+// user lands in a clean shell prompt; pass false when only re-skinning
+// (e.g. after the running indicator flips).
+func (m *Model) refreshTextarea(clearValue bool) {
+	if clearValue {
+		m.textarea.Reset()
+		m.pastes.reset()
+	}
+	m.refreshAfterMutation()
+}
+
+// refreshAfterMutation runs the standard textarea/viewport reflow
+// dance that nearly every public mutator on Model performs. Centralized
+// here so shell-mode handlers stay readable.
+func (m *Model) refreshAfterMutation() {
+	if h := m.textarea.Height(); h != m.lastTAHeight {
+		m.lastTAHeight = h
+	}
+	m.updateViewportDimensions()
+	m.syncViewportContent()
+}
+
 // LoadConversation replaces the transcript with messages from a previously
 // saved chat and binds chatID so the next prompt threads onto the same
 // backend chat. Resets streaming state and the textarea so the user lands
@@ -918,6 +1093,13 @@ func (m Model) transcriptView(th theme.Theme, width int) string {
 }
 
 func renderMessage(th theme.Theme, width int, message Message, spinnerFrame string, status string, showThinking bool) string {
+	// Shell-mode turns short-circuit the assistant pipeline. The block
+	// is rendered in renderShellBlock so the contract stays self-
+	// contained (no role label, no trace, no markdown reflow).
+	if message.Shell != nil {
+		return renderShellBlock(th, width, message.Shell)
+	}
+
 	// Failed/cancelled turns render as a compact ERROR badge + message,
 	// no role label, no trace, no chart/table/tile, with a red bar so
 	// the failure stands out at a glance.
@@ -1154,15 +1336,47 @@ func (m Model) renderInput(th theme.Theme) string {
 	bgStyle := lipgloss.NewStyle().Background(th.InputBg)
 	width := m.textarea.Width()
 	body := m.pastes.decorate(m.textarea.View(), th)
-	if badge := m.renderModelBadge(th, width); badge != "" {
-		body = body + "\n" + badge
+	switch {
+	case m.shellMode:
+		if badge := m.renderShellBadge(th, width); badge != "" {
+			body = body + "\n" + badge
+		}
+	default:
+		if badge := m.renderModelBadge(th, width); badge != "" {
+			body = body + "\n" + badge
+		}
 	}
 	// One extra left column inside the InputBg rectangle creates
 	// breathing room between the accent bar and the text content.
 	gutter := bgStyle.Render(" ")
 	body = prefixLines(body, gutter)
 	taView := padLinesToWidth(bgStyle, width+1, body)
-	return addLeftBar(th.InputAccent, taView)
+	barStyle := th.InputAccent
+	if m.shellMode {
+		barStyle = th.ShellAccent
+	}
+	return addLeftBar(barStyle, taView)
+}
+
+// renderShellBadge mirrors renderModelBadge: bottom-left of the input
+// box, single row, painted on InputBg. "Shell" takes the yellow shell
+// accent (mirrors the live yellow left bar) and the rest of the row
+// stays muted so the hint reads as secondary text. While a command is
+// running the hint switches to a spinner + cancel cue. Returns "" when
+// the available width cannot fit anything meaningful.
+func (m Model) renderShellBadge(th theme.Theme, width int) string {
+	if width < 6 {
+		return ""
+	}
+	bg := th.InputBg
+	accent := th.ShellAccent.Background(bg).Bold(true)
+	muted := lipgloss.NewStyle().Foreground(th.MutedColor).Background(bg)
+
+	if m.shellRunning {
+		spin := th.ShellAccent.Background(bg).Render(m.spinner.View())
+		return accent.Render("Shell") + muted.Render(" · ") + spin + muted.Render(" running… esc cancels")
+	}
+	return accent.Render("Shell") + muted.Render(" · enter: runs · esc: exits")
 }
 
 // renderModelBadge returns the single-line "Model · <name>" badge styled

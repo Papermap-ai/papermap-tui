@@ -11,6 +11,7 @@ const (
 	commandSwitchWorkspace = "switch-workspace"
 	commandSwitchModel     = "switch-model"
 	commandToggleThinking  = "toggle-thinking"
+	commandShellMode       = "shell-mode"
 	commandClearSession    = "clear-session"
 	commandQuit            = "quit"
 )
@@ -42,6 +43,12 @@ func chatPaletteCommands() []palette.Command {
 			Title:    "Toggle thinking",
 			Hint:     "Show or hide the assistant's reasoning trace",
 			Shortcut: "Ctrl+T",
+		},
+		{
+			ID:       commandShellMode,
+			Title:    "Shell mode",
+			Hint:     "Run a one-off shell command from the prompt input",
+			Shortcut: "!",
 		},
 		{
 			ID:       commandClearSession,

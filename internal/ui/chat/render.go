@@ -1,10 +1,12 @@
 package chat
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
@@ -51,6 +53,82 @@ func addLeftBar(barStyle lipgloss.Style, content string) string {
 		result[i] = bar + " " + line
 	}
 	return strings.Join(result, "\n")
+}
+
+// renderShellBlock formats a transient "!" shell-mode turn. Layout:
+//
+//	$ <command>                 (yellow accent on the prompt sigil)
+//	<output>                    (sanitized, monospace, no markdown)
+//	exit 0 · 12ms · 1.2 KB      (footer, muted; truncation marker
+//	                             surfaces in the same row when set)
+//
+// The block is wrapped in the shared yellow accent bar so it reads as
+// distinct from assistant turns at a glance. Renders nothing when the
+// pointer is nil.
+func renderShellBlock(th theme.Theme, width int, r *ShellResult) string {
+	if r == nil {
+		return ""
+	}
+	sigil := th.ShellAccent.Render("$")
+	cmd := th.Body.Render(r.Command)
+	header := sigil + " " + cmd
+
+	parts := []string{header}
+
+	output := strings.TrimRight(r.Output, "\n")
+	if output != "" {
+		parts = append(parts, output)
+	}
+	if r.Truncated {
+		parts = append(parts, th.Muted.Render(fmt.Sprintf(
+			"… (truncated at %s)", humanBytes(r.CapBytes),
+		)))
+	}
+
+	footer := shellFooter(th, r)
+	if footer != "" {
+		parts = append(parts, footer)
+	}
+
+	_ = width // reserved for future wrapping; kept for signature parity.
+	return addLeftBar(th.ShellAccent, strings.Join(parts, "\n"))
+}
+
+func shellFooter(th theme.Theme, r *ShellResult) string {
+	segs := []string{fmt.Sprintf("exit %d", r.ExitCode)}
+	if r.Duration > 0 {
+		segs = append(segs, formatShellDuration(r.Duration))
+	}
+	if r.ErrorText != "" {
+		segs = append(segs, r.ErrorText)
+	}
+	return th.Muted.Render(strings.Join(segs, " · "))
+}
+
+func formatShellDuration(d time.Duration) string {
+	switch {
+	case d < time.Millisecond:
+		return fmt.Sprintf("%dµs", d.Microseconds())
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return d.Round(time.Second).String()
+	}
+}
+
+func humanBytes(n int) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := int64(n) / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.0f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // prefixLines prepends prefix to every line in content. Used to insert a
