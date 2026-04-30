@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.3.0...v0.4.0) (2026-04-30)
+
+
+### Features
+
+* **chat:** "!" shell mode with sandboxed one-shot exec ([6901920](https://github.com/Papermap-ai/papermap-tui/commit/69019202a7627ffc7bb58f13c23d268d17f992ef))
+* **chat:** "!" shell mode with sandboxed one-shot exec ([da10c0c](https://github.com/Papermap-ai/papermap-tui/commit/da10c0c7ca991898411b346e4983ca48870ede53))
+
 ## [0.3.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.2.0...v0.3.0) (2026-04-29)
 
 
