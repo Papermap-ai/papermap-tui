@@ -204,13 +204,34 @@ type Model struct {
 	// session expiry / quit). Distinct from insightCancel so a shell
 	// command and an insight cannot stomp on each other's contexts.
 	shellCancel context.CancelFunc
+	// shellPath is the absolute path of the shell binary to invoke
+	// for "!" mode. Resolved once at startup from config.Config so
+	// PowerShell discovery (Windows) does not run on every command
+	// and so a missing pwsh.exe surfaces a clean error before the
+	// TUI starts. Empty on platforms that resolve lazily (none today).
+	shellPath string
 }
 
 func Run() error {
+	// Load config and resolve the "!" shell binary up front so an
+	// invalid shell.windows value (or a missing pwsh.exe when the
+	// user opted into PowerShell) fails before the TUI starts. This
+	// is intentional: the chat layer should not surface "shell not
+	// found" surprise after the splash screen.
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	shellPath, err := resolveUserShell(cfg)
+	if err != nil {
+		return err
+	}
+
 	model, err := NewModel()
 	if err != nil {
 		return err
 	}
+	model.shellPath = shellPath
 
 	program := tea.NewProgram(model)
 	if _, err := program.Run(); err != nil {
