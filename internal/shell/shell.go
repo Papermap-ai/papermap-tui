@@ -4,10 +4,15 @@
 // output cap. The result struct carries everything the chat layer needs
 // to render a transient turn.
 //
-// The package never logs the command text or its output. The AGENTS.md
-// credential rules apply even though shell payloads are not credentials:
-// users may paste secrets into a "!" line, and we do not want them in
-// crash dumps or panic traces.
+// Per-OS process control lives in process_unix.go and process_windows.go;
+// per-OS escape-introducer sets live in escapes_unix.go and escapes_windows.go.
+//
+// SECURITY: Errors returned from this package MUST NOT include the
+// user's command string or any portion of process stdout/stderr. Users
+// paste secrets into "!" mode, and we do not want them in crash dumps,
+// panic traces, or wrapped errors. Wrap with operation name only
+// (e.g. fmt.Errorf("assign job: %w", err)) — never include cmd, output,
+// or any caller-supplied byte slice.
 package shell
 
 import (
@@ -19,7 +24,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -29,7 +33,15 @@ import (
 // process in that case so a runaway command (e.g. `yes`) cannot
 // exhaust memory.
 type Result struct {
-	Command   string
+	// SECURITY: Command is the raw user-typed shell command. It MUST
+	// NOT be persisted to disk, sent to the backend, included in
+	// crash reports, or otherwise transmitted. Future "export
+	// transcript" features must redact "!" turns or omit them.
+	Command string
+	// SECURITY: Output is raw process stdout+stderr after ANSI
+	// sanitization. Same constraints as Command — users paste
+	// secrets into "!" lines and the output may echo them back
+	// (e.g. `! echo $TOKEN`). Treat as untrusted-and-sensitive.
 	Output    string
 	ExitCode  int
 	Duration  time.Duration
@@ -50,19 +62,42 @@ const DefaultCap = 256 * 1024
 // the child; it never reaches the user.
 var errOutputCapExceeded = errors.New("shell: output cap exceeded")
 
-// Run executes cmd via `shellPath -c cmd` with a fresh process group so
-// the whole tree can be killed on cancel or cap overflow. The returned
-// Result is always populated even on error so the chat layer can render
-// a stable failure block.
+// errCommandHasNUL is returned when the caller passes a command
+// containing a NUL byte. Windows CreateProcessW silently truncates at
+// NUL, so we reject up front to keep the cross-OS behavior
+// predictable. The error text is intentionally generic so it can be
+// surfaced to the user without leaking the command.
+var errCommandHasNUL = errors.New("shell: command contains NUL byte")
+
+// Run executes cmd via shellPath using a per-OS argv recipe (e.g.
+// `-c` on Unix, `/C` on cmd.exe, `-NoProfile -NonInteractive -NoLogo
+// -Command` on PowerShell). On Unix the child runs in its own process
+// group so the whole tree can be killed on cancel or cap overflow; on
+// Windows the child is assigned to a Job Object with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so the kernel kills the tree
+// when we close the handle. The returned Result is always populated
+// even on error so the chat layer can render a stable failure block.
 //
-// shellPath should be a validated absolute path to an executable. When
-// it is empty Run falls back to /bin/sh.
-func Run(ctx context.Context, shellPath, cmd string, capBytes int) (Result, error) {
+// shellPath should be a validated absolute path to an executable.
+// When it is empty Run defers to the per-OS default (see
+// defaultShellPath).
+//
+// env, when non-nil, replaces the inherited environment for the
+// child. Pass nil to inherit os.Environ() unchanged. Callers that
+// want to scrub PAPERMAP_* tokens from the child env should build the
+// filtered slice themselves and pass it here.
+//
+// SECURITY: Do not include cmd or shellPath in any error wrapping.
+// See package doc.
+func Run(ctx context.Context, shellPath, cmd string, capBytes int, env []string) (Result, error) {
 	if capBytes <= 0 {
 		capBytes = DefaultCap
 	}
 	if strings.TrimSpace(shellPath) == "" {
-		shellPath = "/bin/sh"
+		shellPath = defaultShellPath()
+	}
+	if strings.ContainsRune(cmd, 0x00) {
+		return Result{Command: cmd, CapBytes: capBytes}, errCommandHasNUL
 	}
 
 	start := time.Now()
@@ -73,35 +108,38 @@ func Run(ctx context.Context, shellPath, cmd string, capBytes int) (Result, erro
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	c := exec.CommandContext(runCtx, shellPath, "-c", cmd)
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	c.Cancel = func() error {
-		// Kill the entire process group. The negative pid form of
-		// syscall.Kill targets the process group leader's group,
-		// catching any backgrounded children spawned by the shell
-		// (e.g. `sleep 60 &`). Falling back to Process.Kill keeps
-		// us correct on the off chance Setpgid was not honored.
-		if c.Process != nil {
-			if err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL); err == nil {
-				return nil
-			}
-			return c.Process.Kill()
-		}
-		return nil
+	args := shellArgs(shellPath, cmd)
+	c := exec.CommandContext(runCtx, shellPath, args...)
+	if env != nil {
+		c.Env = env
 	}
-	// Give the cancel signal a brief window to land before Wait
-	// returns. Without WaitDelay the goroutine reading stdout can
-	// hang on a child that ignores SIGTERM.
-	c.WaitDelay = 250 * time.Millisecond
+	// Stdin is intentionally nil so commands that read stdin (e.g.
+	// `cat`, `more`) EOF immediately rather than hanging behind
+	// WaitDelay. A user typing "! cat" should see an instant prompt
+	// return, not a 250ms freeze on cancel.
+	c.Stdin = nil
 
 	buf := &bytes.Buffer{}
 	w := newCappedWriter(buf, capBytes, cancel)
 	c.Stdout = w
 	c.Stderr = w
 
-	err := c.Run()
+	cleanup, err := configureProcess(c, cancel)
+	if err != nil {
+		// configureProcess refused to set up (e.g. Windows Job
+		// Object creation failed). Surface a clean error without
+		// the command text.
+		return res, fmt.Errorf("configure process: %w", err)
+	}
+	defer cleanup()
+
+	err = runUnderJob(c)
 	res.Duration = time.Since(start)
-	res.ExitCode = c.ProcessState.ExitCode()
+	if c.ProcessState != nil {
+		res.ExitCode = c.ProcessState.ExitCode()
+	} else {
+		res.ExitCode = -1
+	}
 	res.Truncated = w.truncated()
 	res.Output = sanitizeANSI(buf.String())
 
@@ -162,6 +200,10 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 	return n, errOutputCapExceeded
 }
 
+// fire triggers the cancel func exactly once. The cancel func is a
+// context.CancelFunc which is panic-safe; if a future maintainer
+// swaps in a closure, that closure must not panic — this writer holds
+// the mutex while calling it.
 func (w *cappedWriter) fire() {
 	if w.cancelled {
 		return

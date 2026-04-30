@@ -136,10 +136,12 @@ func isPrintableOrAllowedControl(c byte) bool {
 	return c >= 0x20 && c != 0x7f
 }
 
-// escapeIntroducers is the set of single-byte values that begin a
-// terminal escape sequence (ESC plus the 8-bit C1 introducers we
-// care about: CSI, OSC, DCS, PM, APC, SOS).
-var escapeIntroducers = []byte{0x1b, 0x9b, 0x9d, 0x90, 0x9e, 0x9f, 0x98}
+// escapeIntroducers is defined per-OS. On Unix we recognize ESC plus
+// the 8-bit C1 introducers (CSI/OSC/DCS/PM/APC/SOS). On Windows the
+// console hosts UTF-16LE / UTF-8 output where bytes in the 0x90-0x9f
+// range are valid UTF-8 continuation bytes inside multibyte runes;
+// matching them as introducers would corrupt non-ASCII output. We
+// strip ESC-introduced sequences only on Windows.
 
 func containsAnyByte(s string, set []byte) bool {
 	for i := 0; i < len(s); i++ {
