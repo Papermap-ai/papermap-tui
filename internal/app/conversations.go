@@ -316,6 +316,16 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 		m.screen = screenChat
 		m.chat.ToggleThinking()
 		return nil
+	case commandShellMode:
+		m.screen = screenChat
+		// Mirror the "!" intercept guard: only latch shell mode when the
+		// textarea is empty and nothing else is in flight. Silently
+		// no-op otherwise so the palette never strands the user in a
+		// partially-typed prompt or mid-stream.
+		if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() && !m.chat.IsShellRunning() && !m.chat.IsShellMode() {
+			m.chat.SetShellMode(true)
+		}
+		return nil
 	case commandClearSession:
 		m.screen = screenChat
 		m.cancelInsight()

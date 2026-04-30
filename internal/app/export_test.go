@@ -49,6 +49,14 @@ func (m Model) ScreenName() string {
 	return string(m.screen)
 }
 
+// WithChatForTest swaps the embedded chat model so tests can mutate
+// chat-side state (textarea contents, shell mode) without exposing the
+// underlying field.
+func (m Model) WithChatForTest(c chat.Model) Model {
+	m.chat = c
+	return m
+}
+
 // SetStreamingForTest forces the model into the in-flight insight state
 // without driving the full SubmitMsg/HTTP/SSE pipeline. Used to exercise
 // the user-initiated cancel path. The chat textarea is reset so the test
