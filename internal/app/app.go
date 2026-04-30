@@ -198,6 +198,12 @@ type Model struct {
 	// defaultModelSlug is the backend-recommended default. Used when
 	// the persisted SelectedModel is empty or no longer valid.
 	defaultModelSlug string
+	// shellCancel is the cancel func for the in-flight "!" shell-mode
+	// command. Set in startShellCommand and called from
+	// cancelShellCommand on user-initiated teardown (esc / ctrl+l /
+	// session expiry / quit). Distinct from insightCancel so a shell
+	// command and an insight cannot stomp on each other's contexts.
+	shellCancel context.CancelFunc
 }
 
 func Run() error {
@@ -299,6 +305,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Clear startup errors once the user is actively chatting.
 		m.startupErr = nil
 		return m, m.startInsight(msg)
+	case chat.ShellSubmitMsg:
+		m.startupErr = nil
+		return m, m.startShellCommand(msg.Command)
+	case shellResultMsg:
+		return m.handleShellResult(msg), nil
 	case insightStartPair:
 		return m.handleInsightStartPair(msg)
 	case insightStartedMsg:
@@ -614,13 +625,22 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// be typed as a literal character. ctrl+p is always an opener.
 	if m.screen == screenChat && m.authenticated {
 		switch msg.String() {
+		case keyShellMode:
+			// "!" toggles shell mode only when the textarea is
+			// empty and no insight or shell command is in flight.
+			// Otherwise the keystroke flows through to the
+			// textarea so users can still type "!" mid-prompt.
+			if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() && !m.chat.IsShellRunning() && !m.chat.IsShellMode() {
+				m.chat.SetShellMode(true)
+				return m, nil
+			}
 		case keyCommandPalette:
-			if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() {
+			if m.chat.TextareaIsEmpty() && !m.chat.IsStreaming() && !m.chat.IsShellMode() {
 				m.openCommandPalette()
 				return m, nil
 			}
 		case keyConversations:
-			if !m.chat.IsStreaming() {
+			if !m.chat.IsStreaming() && !m.chat.IsShellRunning() {
 				cmd := m.openConversations()
 				return m, cmd
 			}
@@ -628,13 +648,25 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// TAB cycles to the next available model. Suppressed
 			// while streaming so an in-flight request keeps the
 			// model that produced it.
-			if !m.chat.IsStreaming() {
+			if !m.chat.IsStreaming() && !m.chat.IsShellMode() {
 				return m.cycleModel(), nil
 			}
 		case keyEscape:
-			// While streaming, esc cancels the in-flight request. Keep
-			// this above the chat.Update delegation so the textarea
-			// does not see the keystroke.
+			// Esc precedence (most specific first):
+			//   1. cancel an in-flight shell command,
+			//   2. exit shell mode (drop any draft),
+			//   3. cancel an in-flight insight stream.
+			// The chat layer's own selection-clear case still
+			// runs first inside chat.Update because that branch
+			// is handled before the textarea sees the key.
+			if m.chat.IsShellRunning() {
+				m.cancelShellCommand()
+				return m, nil
+			}
+			if m.chat.IsShellMode() {
+				m.chat.SetShellMode(false)
+				return m, nil
+			}
 			if m.chat.IsStreaming() {
 				return m, m.userCancelInsight()
 			}
@@ -661,7 +693,9 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyClearChat:
 		m.cancelInsight()
+		m.cancelShellCommand()
 		m.resetInsightState()
+		m.chat.CancelShell()
 		m.chat.Clear()
 		return m, nil
 	}
