@@ -85,3 +85,76 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+func TestLoadDefaultsShellWindowsPwsh(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(apiURLEnvKey, "")
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.Shell.Windows != ShellWindowsPwsh {
+		t.Fatalf("default shell.windows = %q, want %q", got.Shell.Windows, ShellWindowsPwsh)
+	}
+}
+
+func TestLoadAcceptsShellWindowsCmd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(apiURLEnvKey, "")
+
+	dir := filepath.Join(home, ".papermap")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	payload := []byte("shell:\n  windows: cmd\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), payload, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.Shell.Windows != ShellWindowsCmd {
+		t.Fatalf("shell.windows = %q, want %q", got.Shell.Windows, ShellWindowsCmd)
+	}
+}
+
+func TestLoadRejectsInvalidShellWindows(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(apiURLEnvKey, "")
+
+	dir := filepath.Join(home, ".papermap")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	payload := []byte("shell:\n  windows: powershell\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), payload, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for invalid shell.windows")
+	}
+}
+
+func TestSaveStripsDefaultShellWindows(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(apiURLEnvKey, "")
+
+	if err := Save(Config{APIURL: defaultAPIURL, Shell: ShellConfig{Windows: ShellWindowsPwsh}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".papermap", "config.yaml"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if contains(string(data), "windows:") {
+		t.Fatalf("expected shell section to be stripped, got:\n%s", data)
+	}
+}

@@ -20,10 +20,35 @@ type Config struct {
 	// "opus-4.6") the user picked via the model picker or TAB cycle.
 	// Empty means defer to the backend default.
 	SelectedModel string `yaml:"selected_model,omitempty"`
+	// Shell controls the per-OS shell binary used by chat "!" mode.
+	// Fields are scoped to the OS they apply to so unrelated
+	// platforms ignore them rather than fight over a single key.
+	Shell ShellConfig `yaml:"shell,omitempty"`
 }
 
+// ShellConfig holds per-OS shell preferences for chat "!" mode.
+type ShellConfig struct {
+	// Windows selects the shell family invoked on Windows. Valid
+	// values: "pwsh" (PowerShell 7+, the default) and "cmd"
+	// (cmd.exe). Both are resolved to absolute paths under
+	// admin-only directories at runtime; we never honor PATH or
+	// %COMSPEC%. Unset means default ("pwsh"). Ignored on non-Windows.
+	Windows string `yaml:"windows,omitempty"`
+}
+
+// Default values for Shell config. Exposed as constants so the
+// per-OS resolver in internal/app can reference them without a
+// stringly-typed dependency.
+const (
+	ShellWindowsPwsh = "pwsh"
+	ShellWindowsCmd  = "cmd"
+)
+
 func Default() Config {
-	return Config{APIURL: defaultAPIURL}
+	return Config{
+		APIURL: defaultAPIURL,
+		Shell:  ShellConfig{Windows: ShellWindowsPwsh},
+	}
 }
 
 func Load() (Config, error) {
@@ -56,7 +81,28 @@ func LoadFromPaths(path string) (Config, error) {
 		cfg.APIURL = defaultAPIURL
 	}
 
+	// Apply shell defaults after YAML load so a config file that
+	// omits the section gets the same value as a brand-new install.
+	if strings.TrimSpace(cfg.Shell.Windows) == "" {
+		cfg.Shell.Windows = ShellWindowsPwsh
+	}
+	if err := validateShellWindows(cfg.Shell.Windows); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// validateShellWindows accepts only the documented enum values for
+// shell.windows. Unknown values are rejected at load time so the user
+// fixes a typo (e.g. "powershell" vs "pwsh") before the TUI starts.
+func validateShellWindows(v string) error {
+	switch v {
+	case ShellWindowsPwsh, ShellWindowsCmd:
+		return nil
+	default:
+		return fmt.Errorf("invalid shell.windows %q (want %q or %q)", v, ShellWindowsPwsh, ShellWindowsCmd)
+	}
 }
 
 func configPath() (string, error) {
@@ -88,6 +134,9 @@ func saveConfigTo(path string, cfg Config) error {
 	persisted := cfg
 	if strings.TrimSpace(persisted.APIURL) == defaultAPIURL {
 		persisted.APIURL = ""
+	}
+	if persisted.Shell.Windows == ShellWindowsPwsh {
+		persisted.Shell.Windows = ""
 	}
 
 	payload, err := yaml.Marshal(persisted)

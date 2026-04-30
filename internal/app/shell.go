@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -14,35 +14,39 @@ import (
 )
 
 // shellResultMsg carries the outcome of a "!" shell-mode command from
-// the worker goroutine back into the Bubble Tea Update loop. The
-// payload is the same struct the chat layer renders, plus the error
-// from shell.Run so the handler can compose a stable footer.
+// the worker goroutine back into the Bubble Tea Update loop.
 type shellResultMsg struct {
 	result shell.Result
 	err    error
 }
 
-// startShellCommand validates $SHELL, kicks off shell.Run on a worker
-// goroutine, and stores the cancel func so esc can tear it down. The
-// returned Cmd resolves to a shellResultMsg once the command exits.
+// shellMaxDuration is the hard ceiling for any single "!" invocation.
+// A user can still cancel earlier with esc; this exists to bound the
+// blast radius of forgotten background loops or hung child processes
+// that survived the cancel signal.
+const shellMaxDuration = 10 * time.Minute
+
+// startShellCommand uses the shell binary resolved at TUI startup
+// (m.shellPath), scrubs PAPERMAP_* tokens from the inherited env,
+// and kicks off shell.Run on a worker goroutine with a 10-minute
+// timeout. The cancel func is stored on the model so esc can tear
+// it down.
 //
-// The chat layer has already latched shellRunning before this runs, so
-// we do not touch chat state here. All transcript mutation happens in
-// handleShellResult once the command lands.
+// All transcript mutation happens in handleShellResult once the
+// command lands.
 func (m *Model) startShellCommand(cmdLine string) tea.Cmd {
-	shellPath := resolveUserShell()
-	ctx, cancel := context.WithCancel(context.Background())
+	shellPath := m.shellPath
+	env := scrubChildEnv(os.Environ())
+	ctx, cancel := context.WithTimeout(context.Background(), shellMaxDuration)
 	m.shellCancel = cancel
 	return func() tea.Msg {
-		res, err := shell.Run(ctx, shellPath, cmdLine, shell.DefaultCap)
+		res, err := shell.Run(ctx, shellPath, cmdLine, shell.DefaultCap, env)
 		return shellResultMsg{result: res, err: err}
 	}
 }
 
 // cancelShellCommand fires the worker's cancel func. Bubble Tea will
-// still receive a shellResultMsg once shell.Run unwinds, and the
-// handler relies on that delivery to flip shellRunning off and append
-// the (cancelled) transcript turn.
+// still receive a shellResultMsg once shell.Run unwinds.
 func (m *Model) cancelShellCommand() {
 	if m.shellCancel != nil {
 		m.shellCancel()
@@ -60,8 +64,7 @@ func (m Model) handleShellResult(msg shellResultMsg) Model {
 			errors.Is(msg.err, context.DeadlineExceeded):
 			errorText = "cancelled"
 		case res.Truncated:
-			// Truncation already surfaced inline; the muted
-			// footer can stay quiet so we do not double-shout.
+			// Truncation already surfaced inline.
 		default:
 			errorText = msg.err.Error()
 		}
@@ -78,25 +81,18 @@ func (m Model) handleShellResult(msg shellResultMsg) Model {
 	return m
 }
 
-// resolveUserShell picks the shell binary to invoke for "!" commands.
-// $SHELL wins when it points at an existing executable file; otherwise
-// /bin/sh is the fallback so the feature still works on minimal
-// environments. Validating the path here keeps shell.Run focused on
-// execution semantics.
-func resolveUserShell() string {
-	candidate := strings.TrimSpace(os.Getenv("SHELL"))
-	if candidate == "" {
-		return "/bin/sh"
+// scrubChildEnv removes PAPERMAP_* variables from the environment we
+// hand to the spawned shell. The TUI process can carry an API URL
+// override (PAPERMAP_API_URL) plus future auth-shaped vars; none of
+// those should leak into a user-typed `! env` or any process the
+// command spawns.
+func scrubChildEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PAPERMAP_") {
+			continue
+		}
+		out = append(out, kv)
 	}
-	if !filepath.IsAbs(candidate) {
-		return "/bin/sh"
-	}
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() {
-		return "/bin/sh"
-	}
-	if info.Mode()&0o111 == 0 {
-		return "/bin/sh"
-	}
-	return candidate
+	return out
 }
