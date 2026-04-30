@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -50,24 +51,28 @@ func defaultShellPath() string {
 	return filepath.Join(root, "System32", "cmd.exe")
 }
 
-// shellArgs builds the argv for shellPath. PowerShell support is
-// behind a future config key (Shell.Windows = "powershell") + an
-// install-path allowlist; until that ships, every invocation is
-// cmd.exe and renamed binaries would fall through to /C and fail
-// cleanly rather than execute anything unexpected.
+// shellArgs builds the argv for shellPath. Dispatches by basename:
 //
-// TODO(papermap-tui#shell-windows-pwsh): when the config key lands,
-// dispatch on the resolved binary name only after verifying its
-// absolute path is under
-// %SystemRoot%\System32\WindowsPowerShell\v1.0\ or
-// %ProgramFiles%\PowerShell\, and use:
+//   - pwsh.exe (PowerShell 7+): -NoProfile -NonInteractive -NoLogo -Command <cmd>
+//   - cmd.exe (default): /C <cmd>
 //
-//	[]string{"-NoProfile", "-NonInteractive", "-NoLogo", "-Command", cmd}
+// -NoProfile is REQUIRED for PowerShell — without it every "!"
+// invocation runs the user's $PROFILE script, which defeats the
+// point of a one-shot. -NonInteractive blocks prompts that would
+// hang behind WaitDelay. -NoLogo suppresses the banner.
 //
-// -NoProfile is REQUIRED — without it every "!" invocation runs the
-// user's $PROFILE script, which defeats the point of a one-shot.
-func shellArgs(_ string, cmd string) []string {
-	return []string{"/C", cmd}
+// Renamed binaries fall through to the cmd.exe recipe; that produces
+// a clean failure ("'/C' is not recognized…") rather than arbitrary
+// execution. powershell.exe (Windows PowerShell 5.1) is intentionally
+// not matched — the resolver only returns pwsh.exe or cmd.exe.
+func shellArgs(shellPath, cmd string) []string {
+	base := strings.ToLower(filepath.Base(shellPath))
+	switch base {
+	case "pwsh.exe", "pwsh":
+		return []string{"-NoProfile", "-NonInteractive", "-NoLogo", "-Command", cmd}
+	default:
+		return []string{"/C", cmd}
+	}
 }
 
 // configureProcess creates a Job Object, wires Cmd.Cancel to

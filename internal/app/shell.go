@@ -26,15 +26,16 @@ type shellResultMsg struct {
 // that survived the cancel signal.
 const shellMaxDuration = 10 * time.Minute
 
-// startShellCommand resolves the per-OS shell, scrubs PAPERMAP_*
-// tokens from the inherited env, and kicks off shell.Run on a worker
-// goroutine with a 10-minute timeout. The cancel func is stored on
-// the model so esc can tear it down.
+// startShellCommand uses the shell binary resolved at TUI startup
+// (m.shellPath), scrubs PAPERMAP_* tokens from the inherited env,
+// and kicks off shell.Run on a worker goroutine with a 10-minute
+// timeout. The cancel func is stored on the model so esc can tear
+// it down.
 //
 // All transcript mutation happens in handleShellResult once the
 // command lands.
 func (m *Model) startShellCommand(cmdLine string) tea.Cmd {
-	shellPath := resolveUserShell()
+	shellPath := m.shellPath
 	env := scrubChildEnv(os.Environ())
 	ctx, cancel := context.WithTimeout(context.Background(), shellMaxDuration)
 	m.shellCancel = cancel
