@@ -23,6 +23,11 @@
 - [x] Add an ability to change the model that the user is working with on papermap
 - [x] add copying and pasting ability to the UI
 - [x] Figure out how to run shell commands in the chat
-- [ ] Figure out how to add new workspaces from the UI
 
 
+## Phase Three
+- [x] Figure out how to add new workspaces from the UI
+- [ ] fix the scroll down issue when in shell mode and then you run a shell command 
+- [ ] edit the sign in experience to align with that of codex
+- [ ] figure out a way to render some of the other charts
+- [ ] add a verification step when it comes to web search and a way to toggle it on and off

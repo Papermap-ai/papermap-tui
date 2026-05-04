@@ -11,6 +11,7 @@ import (
 
 	"github.com/papermap/papermap-tui/internal/api"
 	authstore "github.com/papermap/papermap-tui/internal/auth"
+	"github.com/papermap/papermap-tui/internal/cli/clitheme"
 	"github.com/papermap/papermap-tui/internal/config"
 )
 
@@ -99,7 +100,7 @@ func runLoginWith(ctx context.Context, w io.Writer, deps LoginDeps, opts LoginOp
 					return nil
 				}),
 		),
-	).WithTheme(papermapHuhTheme())
+	).WithTheme(clitheme.PapermapHuh())
 
 	if err := form.Run(); err != nil {
 		return fmt.Errorf("login form: %w", err)

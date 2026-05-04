@@ -32,6 +32,7 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("build api client: %w", err)
 		}
+		store.SetRefresher(api.NewRefresher(client, store))
 
 		if cred.AccessToken != "" {
 			if err := client.Logout(ctx); err != nil {
