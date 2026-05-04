@@ -133,3 +133,89 @@ func TestListWorkspaces_PaginatesUntilTotalPages(t *testing.T) {
 		t.Errorf("expected 3 entries (one per page), got %d", len(entries))
 	}
 }
+
+// TestCreateWorkspace_PostsBodyAndDecodes verifies that CreateWorkspace
+// sends the expected JSON body and unwraps the standard envelope.
+func TestCreateWorkspace_PostsBodyAndDecodes(t *testing.T) {
+	t.Parallel()
+
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": "Workspace created successfully",
+			"success": true,
+			"data": map[string]any{
+				"workspace_id":   "ws_new",
+				"name":           "Acme",
+				"workspace_type": "POSTGRES",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, server.Client(), nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	got, err := client.CreateWorkspace(context.Background(), CreateWorkspaceRequest{
+		Name: "Acme",
+		Database: &DatabaseInput{
+			DatabaseType: "POSTGRES",
+			Host:         "db.example.com",
+			Port:         5432,
+			Name:         "app",
+			UserName:     "user",
+			Password:     "secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/api/v1/analytics/workspaces" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotBody["name"] != "Acme" {
+		t.Errorf("body.name = %v", gotBody["name"])
+	}
+	db, ok := gotBody["database"].(map[string]any)
+	if !ok {
+		t.Fatalf("body.database missing or wrong shape: %+v", gotBody)
+	}
+	if db["database_type"] != "POSTGRES" || db["host"] != "db.example.com" {
+		t.Errorf("database fields wrong: %+v", db)
+	}
+	if got == nil || got.WorkspaceID != "ws_new" {
+		t.Errorf("decoded summary wrong: %+v", got)
+	}
+}
+
+func TestCreateWorkspace_RejectsMissingFields(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewClient("https://example.invalid", nil, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := client.CreateWorkspace(context.Background(), CreateWorkspaceRequest{}); err == nil {
+		t.Fatal("expected error for empty request")
+	}
+	if _, err := client.CreateWorkspace(context.Background(), CreateWorkspaceRequest{Name: "x"}); err == nil {
+		t.Fatal("expected error for missing database")
+	}
+}

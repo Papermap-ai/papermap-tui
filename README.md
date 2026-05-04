@@ -75,6 +75,31 @@ papermap
 
 `auth login` writes credentials to `~/.papermap/credentials` (mode `0600`). Subsequent launches restore your session automatically and refresh tokens as needed.
 
+### Manage workspaces from the CLI
+
+Create and list workspaces without leaving the terminal. Both commands require a prior `papermap auth login`.
+
+```bash
+papermap workspace create   # interactive form
+papermap workspace list     # tab-aligned table of your workspaces
+```
+
+`workspace create` walks you through a huh form that collects:
+
+- Workspace name
+- Database type — `Postgres`, `MySQL`, `MongoDB`, or `Supabase`
+- Host, port (defaults to `5432`/`3306`/`27017`/`5432` if left blank), database name, username, password
+
+The form posts to `POST /api/v1/analytics/workspaces`. The backend verifies the
+database connection asynchronously, so the command returns as soon as the
+workspace row is created and prints `Verifying connection in background.` On
+success the local workspace cache (`~/.papermap/workspaces.json`) is refreshed
+so the TUI sees the new workspace on next launch.
+
+Only standard databases are supported in the CLI today. OAuth integrations
+(Stripe, QuickBooks, Google Ads, etc.) and Sheets/CSV uploads still need to
+be created from the web app.
+
 ## Usage
 
 ```text
@@ -92,13 +117,15 @@ papermap [flags] [command]
 
 ### Commands
 
-| Command              | Description                                       |
-| -------------------- | ------------------------------------------------- |
-| _(none)_             | Launch the TUI                                    |
-| `auth login`         | Sign in with email + password                     |
-| `auth logout`        | Clear stored credentials and workspace cache      |
-| `auth whoami`        | Print the currently signed-in user                |
-| `logout`             | Deprecated alias for `auth logout`                |
+| Command                | Description                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------- |
+| _(none)_               | Launch the TUI                                                               |
+| `auth login`           | Sign in with email + password                                                |
+| `auth logout`          | Clear stored credentials and workspace cache                                 |
+| `auth whoami`          | Print the currently signed-in user                                           |
+| `workspace create`     | Create a database-backed workspace (Postgres, MySQL, MongoDB, Supabase)      |
+| `workspace list`       | List workspaces visible to the signed-in user                                |
+| `logout`               | Deprecated alias for `auth logout`                                           |
 
 ### Keyboard controls
 
@@ -199,14 +226,16 @@ make release-snapshot   # local goreleaser snapshot build
 Project layout:
 
 ```text
-cmd/papermap/        # CLI entry point + subcommand routing
-internal/api/        # Backend HTTP client + SSE streaming
-internal/auth/       # Token store and credential persistence
-internal/cli/auth/   # `auth login|logout|whoami` huh forms
-internal/config/     # Config + env loading
-internal/theme/      # Lipgloss palette and shared styles
-internal/ui/         # Bubble Tea screen models (landing/chat/workspace)
-internal/app/        # Root app model and orchestration
+cmd/papermap/             # CLI entry point + subcommand routing
+internal/api/             # Backend HTTP client + SSE streaming
+internal/auth/            # Token store and credential persistence
+internal/cli/auth/        # `auth login|logout|whoami` huh forms
+internal/cli/clitheme/    # Shared huh theme used by CLI subcommands
+internal/cli/workspace/   # `workspace create|list` huh forms
+internal/config/          # Config + env loading
+internal/theme/           # Lipgloss palette and shared styles
+internal/ui/              # Bubble Tea screen models (landing/chat/workspace)
+internal/app/             # Root app model and orchestration
 ```
 
 ## Releasing
