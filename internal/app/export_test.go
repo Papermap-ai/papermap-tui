@@ -82,6 +82,71 @@ func (m Model) CancelNotice() string {
 	return m.cancelNotice
 }
 
+// PendingConfirmationFields exposes the active approval modal's state
+// to tests so they can assert focus / countdown / submission status
+// without poking at the unexported pendingConfirmation field directly.
+// Returns an empty struct and false when no modal is active.
+type PendingConfirmationView struct {
+	RequestID         string
+	ConfirmationID    string
+	ToolDisplayName   string
+	Message           string
+	ActionDescription string
+	SecondsRemaining  int
+	AllowSelected     bool
+	Submitting        bool
+}
+
+// PendingConfirmation reports the active approval modal state.
+func (m Model) PendingConfirmation() (PendingConfirmationView, bool) {
+	pc := m.pendingConfirmation
+	if pc == nil {
+		return PendingConfirmationView{}, false
+	}
+	return PendingConfirmationView{
+		RequestID:         pc.requestID,
+		ConfirmationID:    pc.confirmationID,
+		ToolDisplayName:   pc.toolDisplayName,
+		Message:           pc.message,
+		ActionDescription: pc.actionDescription,
+		SecondsRemaining:  pc.secondsRemaining,
+		AllowSelected:     pc.allowSelected,
+		Submitting:        pc.submitting,
+	}, true
+}
+
+// InjectConfirmationRequiredForTest pushes a confirmationRequiredMsg
+// through Update so tests can exercise the full handler path without
+// reaching into private message types.
+func (m Model) InjectConfirmationRequiredForTest(
+	requestID, confirmationID, toolDisplayName, message, actionDescription string,
+	timeoutSeconds int,
+	client *api.Client,
+) (Model, tea.Cmd) {
+	m.client = client
+	if requestID != "" {
+		m.pendingRequestID = requestID
+	}
+	updated, cmd := m.Update(confirmationRequiredMsg{
+		requestID:         requestID,
+		confirmationID:    confirmationID,
+		toolDisplayName:   toolDisplayName,
+		message:           message,
+		actionDescription: actionDescription,
+		timeoutSeconds:    timeoutSeconds,
+	})
+	return updated.(Model), cmd
+}
+
+// TickConfirmationForTest pushes a single countdown tick into Update.
+func (m Model) TickConfirmationForTest(requestID, confirmationID string) (Model, tea.Cmd) {
+	updated, cmd := m.Update(confirmationTickMsg{
+		requestID:      requestID,
+		confirmationID: confirmationID,
+	})
+	return updated.(Model), cmd
+}
+
 // ScreenCommandPalette is the screen identifier for the palette overlay.
 const ScreenCommandPalette = string(screenCommandPalette)
 

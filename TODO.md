@@ -27,7 +27,7 @@
 
 ## Phase Three
 - [x] Figure out how to add new workspaces from the UI
-- [ ] fix the scroll down issue when in shell mode and then you run a shell command 
+- [x] fix the scroll down issue when in shell mode and then you run a shell command 
+- [x] add a verification step when it comes to web search and a way to toggle it on and off
 - [ ] edit the sign in experience to align with that of codex
 - [ ] figure out a way to render some of the other charts
-- [ ] add a verification step when it comes to web search and a way to toggle it on and off
