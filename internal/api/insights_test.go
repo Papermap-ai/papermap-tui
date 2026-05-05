@@ -272,3 +272,57 @@ func TestCancelInsightRequiresRequestID(t *testing.T) {
 		t.Fatal("expected error when request_id is missing")
 	}
 }
+
+func TestInsightStreamConfirmationRequired(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			"event: confirmation_required",
+			`data: {"type":"confirmation_required","confirmation_id":"conf-9","tool_display_name":"Web Search","message":"Allow web search?","action_description":"Search the web for: golang sse","timeout_seconds":60,"request_id":"req-9","chat_id":"chat-9"}`,
+			"",
+			"event: complete",
+			`data: {"type":"complete","status":"success","request_id":"req-9","chat_id":"chat-9"}`,
+			"",
+		}, "\n"))
+	}))
+	defer server.Close()
+
+	client, err := api.NewClient(server.URL, server.Client(), insightTokenSource{})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	stream, err := client.OpenInsightStream(context.Background(), api.InsightStreamRequest{RequestID: "req-9"})
+	if err != nil {
+		t.Fatalf("OpenInsightStream returned error: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != "confirmation_required" {
+		t.Fatalf("expected confirmation_required, got %q", event.Type)
+	}
+	if event.ConfirmationID != "conf-9" {
+		t.Fatalf("expected confirmation_id conf-9, got %q", event.ConfirmationID)
+	}
+	if event.ToolDisplayName != "Web Search" {
+		t.Fatalf("expected tool display name Web Search, got %q", event.ToolDisplayName)
+	}
+	if event.Message != "Allow web search?" {
+		t.Fatalf("expected message populated, got %q", event.Message)
+	}
+	if event.ActionDescription != "Search the web for: golang sse" {
+		t.Fatalf("unexpected action description: %q", event.ActionDescription)
+	}
+	if event.TimeoutSeconds != 60 {
+		t.Fatalf("expected timeout 60, got %d", event.TimeoutSeconds)
+	}
+	if event.RequestID != "req-9" {
+		t.Fatalf("expected request_id req-9, got %q", event.RequestID)
+	}
+}
