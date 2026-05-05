@@ -774,6 +774,7 @@ func (m *Model) AppendShellResult(res ShellResult) {
 	m.textarea.Reset()
 	m.pastes.reset()
 	m.refreshAfterMutation()
+	m.scrollToBottom()
 }
 
 // CancelShell tears down the shell-mode state when the app layer
