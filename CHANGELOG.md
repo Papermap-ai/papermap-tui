@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.4.0...v0.5.0) (2026-05-06)
+
+
+### Features
+
+* **approval:** add tool-call confirmation modal ([919d466](https://github.com/Papermap-ai/papermap-tui/commit/919d4662e9f84bcca0c851c56a9e08b96f00951f))
+* **auth:** browser-based login with already-signed-in short-circuit ([d5ea04c](https://github.com/Papermap-ai/papermap-tui/commit/d5ea04c354416858f824f69b4335a1a30da591cf))
+* **cli:** add 'workspace create' and 'workspace list' subcommands ([628f5dd](https://github.com/Papermap-ai/papermap-tui/commit/628f5dd964cb4b13a1cf6250667222c7b0065ff8))
+* **shell:** default Windows "!" to PowerShell with cmd opt-out ([5470280](https://github.com/Papermap-ai/papermap-tui/commit/547028025a14a33cf75ebb299c6496fa287daa4e))
+* **shell:** port "!" shell mode to Windows ([af1a131](https://github.com/Papermap-ai/papermap-tui/commit/af1a131586d6626649ce7909dea2393fb7e13e80))
+* **shell:** port "!" shell mode to Windows ([ffbc7d2](https://github.com/Papermap-ai/papermap-tui/commit/ffbc7d2891ae8281e778510e1cf495d5d8223a1a))
+
+
+### Bug Fixes
+
+* **chat:** scroll to bottom after shell result append ([9e4ad09](https://github.com/Papermap-ai/papermap-tui/commit/9e4ad095c09f4095cbde649c680ce1957422dfa6))
+
+
+### Documentation
+
+* **readme:** document "!" shell mode and Windows pwsh/cmd config ([26596cc](https://github.com/Papermap-ai/papermap-tui/commit/26596ccf0d4f8e24eb0f0604c2994109dfb60003))
+* **readme:** document "!" shell mode and Windows pwsh/cmd config ([61293dc](https://github.com/Papermap-ai/papermap-tui/commit/61293dc9fcd25756c94ef8e49891745147a4d786))
+
 ## [0.4.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.3.0...v0.4.0) (2026-04-30)
 
 
