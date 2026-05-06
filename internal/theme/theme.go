@@ -46,6 +46,10 @@ type Theme struct {
 	MutedColor       color.Color
 	TextColor        color.Color
 	ButtonBgInactive color.Color
+	// ErrorColor is the raw error palette entry exposed so callers that
+	// need the color for non-text surfaces (button backgrounds, modal
+	// borders) can match the rest of the UI without re-declaring hex.
+	ErrorColor color.Color
 	// SplashLogo is the splash-screen logo color (white) kept distinct
 	// from the green brand accent.
 	SplashLogo color.Color
@@ -105,6 +109,7 @@ func Default() Theme {
 		MutedColor:       muted,
 		TextColor:        text,
 		ButtonBgInactive: lipgloss.Color("#2A2A35"),
+		ErrorColor:       errorColor,
 		SplashLogo:       lipgloss.Color("#FFFFFF"),
 	}
 }

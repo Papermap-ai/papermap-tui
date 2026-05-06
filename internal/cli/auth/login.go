@@ -11,6 +11,7 @@ import (
 
 	"github.com/papermap/papermap-tui/internal/api"
 	authstore "github.com/papermap/papermap-tui/internal/auth"
+	"github.com/papermap/papermap-tui/internal/cli/clitheme"
 	"github.com/papermap/papermap-tui/internal/config"
 )
 
@@ -23,17 +24,90 @@ type LoginDeps struct {
 	PromptIn io.Reader                       // Reserved; huh reads stdin directly.
 }
 
-// LoginOptions controls non-default behavior. Email may pre-fill the form.
+// LoginOptions controls non-default behavior. Email may pre-fill the
+// form (only used by the password flow). UseBrowser forces the
+// browser-based flow; UsePassword forces the legacy email/password
+// flow. If neither is set, the browser flow is used.
 type LoginOptions struct {
-	Email          string
-	APIURLOverride string
+	Email               string
+	APIURLOverride      string
+	FrontendURLOverride string
+	UseBrowser          bool
+	UsePassword         bool
 }
 
-// RunLogin executes `papermap auth login`. It loads config, builds the api
-// client + token store, prompts for credentials with huh, persists them,
-// and warms the unified-workspace cache. Output is plain text on success
-// or error.
+// RunLogin executes `papermap auth login`. By default it runs the
+// browser-based flow; pass UsePassword to fall back to the legacy
+// terminal email/password prompts (useful for SSH or headless
+// environments). If the credential store already holds valid (or
+// refreshable) credentials, the flow short-circuits with a friendly
+// "already signed in" message.
 func RunLogin(ctx context.Context, w io.Writer, opts LoginOptions) error {
+	if email, ok := alreadySignedIn(ctx, opts); ok {
+		_, _ = fmt.Fprintf(w, "Already signed in as %s.\n", email)
+		return nil
+	}
+	if opts.UsePassword {
+		return runPasswordLogin(ctx, w, opts)
+	}
+	return RunBrowserLogin(ctx, w, BrowserLoginOptions{
+		APIURLOverride:      opts.APIURLOverride,
+		FrontendURLOverride: opts.FrontendURLOverride,
+	})
+}
+
+// alreadySignedIn reports whether the credential store currently holds
+// usable credentials for the configured API. It attempts a token
+// refresh if the access token has expired. On any error or missing
+// credentials it returns false so the caller can run a fresh login.
+// The returned string is a best-effort display name (email if known,
+// otherwise "your Papermap account").
+func alreadySignedIn(ctx context.Context, opts LoginOptions) (string, bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", false
+	}
+	if v := strings.TrimSpace(opts.APIURLOverride); v != "" {
+		cfg.APIURL = v
+	}
+
+	store, err := authstore.DefaultStore()
+	if err != nil {
+		return "", false
+	}
+
+	cred, err := store.Load()
+	if err != nil {
+		return "", false
+	}
+
+	client, err := api.NewClient(cfg.APIURL, nil, store)
+	if err != nil {
+		return "", false
+	}
+	store.SetRefresher(api.NewRefresher(client, store))
+
+	token, err := store.AccessToken(ctx)
+	if err != nil || token == "" {
+		return "", false
+	}
+
+	// Reload in case AccessToken refreshed and updated the user record.
+	if updated, lerr := store.Load(); lerr == nil {
+		cred = updated
+	}
+
+	display := strings.TrimSpace(cred.User.Email)
+	if display == "" {
+		display = "your Papermap account"
+	}
+	return display, true
+}
+
+// runPasswordLogin loads config, builds the api client + token store,
+// prompts for credentials with huh, persists them, and warms the
+// unified-workspace cache. Output is plain text on success or error.
+func runPasswordLogin(ctx context.Context, w io.Writer, opts LoginOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -99,7 +173,7 @@ func runLoginWith(ctx context.Context, w io.Writer, deps LoginDeps, opts LoginOp
 					return nil
 				}),
 		),
-	).WithTheme(papermapHuhTheme())
+	).WithTheme(clitheme.PapermapHuh())
 
 	if err := form.Run(); err != nil {
 		return fmt.Errorf("login form: %w", err)

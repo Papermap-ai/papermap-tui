@@ -148,6 +148,63 @@ func TestAppendShellResultClearsModeAndAppendsTurn(t *testing.T) {
 	}
 }
 
+func TestAppendShellResultScrollsToBottom(t *testing.T) {
+	t.Parallel()
+	m := newTestChat(t)
+	// Pad the transcript so the viewport overflows and GotoBottom
+	// is observably different from the initial position.
+	for i := 0; i < 50; i++ {
+		m.messages = append(m.messages, Message{Role: "user", Content: "filler line"})
+	}
+	m.refreshAfterMutation()
+	m.viewport.GotoTop()
+	if m.viewport.AtBottom() {
+		t.Fatal("precondition: viewport must not start at bottom")
+	}
+	// Sticky-scroll respects manual scroll. Reset the latch so the
+	// append behaves like a user who stayed pinned at the bottom
+	// while their command ran.
+	m.userScrolled = false
+
+	m.SetShellMode(true)
+	m.SetShellRunning(true)
+	m.AppendShellResult(ShellResult{
+		Command:  "echo hi",
+		Output:   "hi",
+		ExitCode: 0,
+		Duration: time.Millisecond,
+		CapBytes: 1024,
+	})
+	if !m.viewport.AtBottom() {
+		t.Fatal("expected viewport at bottom after AppendShellResult")
+	}
+}
+
+func TestAppendShellResultRespectsUserScroll(t *testing.T) {
+	t.Parallel()
+	m := newTestChat(t)
+	for i := 0; i < 50; i++ {
+		m.messages = append(m.messages, Message{Role: "user", Content: "filler line"})
+	}
+	m.refreshAfterMutation()
+	m.viewport.GotoTop()
+	// Simulate the user having scrolled up while the command ran.
+	m.userScrolled = true
+
+	m.SetShellMode(true)
+	m.SetShellRunning(true)
+	m.AppendShellResult(ShellResult{
+		Command:  "echo hi",
+		Output:   "hi",
+		ExitCode: 0,
+		Duration: time.Millisecond,
+		CapBytes: 1024,
+	})
+	if m.viewport.AtBottom() {
+		t.Fatal("sticky-scroll violated: jumped to bottom despite userScrolled")
+	}
+}
+
 func TestRenderShellBlockSurfacesTruncation(t *testing.T) {
 	t.Parallel()
 	th := theme.Default()

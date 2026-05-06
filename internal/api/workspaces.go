@@ -197,6 +197,57 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceSummary, error)
 	return collected, nil
 }
 
+// DatabaseInput is the request payload for database-backed workspaces.
+// All fields are required server-side for a working DB connection even
+// though the API marks them optional.
+type DatabaseInput struct {
+	DatabaseType string `json:"database_type"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	Name         string `json:"name"`
+	UserName     string `json:"user_name"`
+	Password     string `json:"password"`
+}
+
+// CreateWorkspaceRequest mirrors the backend WorkspaceCreate schema. The
+// MVP only supports the database path (POSTGRES, MYSQL, MONGODB,
+// SUPABASE), so other source variants are intentionally omitted.
+type CreateWorkspaceRequest struct {
+	Name     string         `json:"name"`
+	Database *DatabaseInput `json:"database,omitempty"`
+}
+
+// CreateWorkspace provisions a new workspace via
+// POST /api/v1/analytics/workspaces. The backend verifies the DB
+// connection asynchronously, so a successful response only indicates the
+// workspace row was created.
+func (c *Client) CreateWorkspace(ctx context.Context, reqBody CreateWorkspaceRequest) (*WorkspaceSummary, error) {
+	if strings.TrimSpace(reqBody.Name) == "" {
+		return nil, fmt.Errorf("workspace name is required")
+	}
+	if reqBody.Database == nil {
+		return nil, fmt.Errorf("database details are required")
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodPost, "/api/v1/analytics/workspaces", reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	decoded, err := decodeJSONResponse[WorkspaceSummary](resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &decoded, nil
+}
+
 func (c *Client) CreateChat(ctx context.Context, reqBody ChatCreateRequest) (*ChatCreateResponse, error) {
 	if strings.TrimSpace(reqBody.DashboardID) == "" && strings.TrimSpace(reqBody.ReportID) == "" {
 		return nil, fmt.Errorf("dashboard id or report id is required")
