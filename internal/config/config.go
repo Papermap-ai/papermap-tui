@@ -10,12 +10,19 @@ import (
 )
 
 const (
-	defaultAPIURL = "https://dataapi.papermap.ai"
-	apiURLEnvKey  = "PAPERMAP_API_URL"
+	defaultAPIURL      = "https://dataapi.papermap.ai"
+	defaultFrontendURL = "https://papermap.ai"
+	apiURLEnvKey       = "PAPERMAP_API_URL"
+	frontendURLEnvKey  = "PAPERMAP_FRONTEND_URL"
 )
 
 type Config struct {
 	APIURL string `yaml:"api_url"`
+	// FrontendURL is the Papermap web app base URL used by the
+	// browser-based login flow. The TUI opens
+	// "<FrontendURL>/auth/login?cli_callback=...&state=..." to start
+	// the flow. Empty means use the built-in default.
+	FrontendURL string `yaml:"frontend_url,omitempty"`
 	// SelectedModel is the LLM model slug (e.g. "gpt-5.4-mini",
 	// "opus-4.6") the user picked via the model picker or TAB cycle.
 	// Empty means defer to the backend default.
@@ -46,8 +53,9 @@ const (
 
 func Default() Config {
 	return Config{
-		APIURL: defaultAPIURL,
-		Shell:  ShellConfig{Windows: ShellWindowsPwsh},
+		APIURL:      defaultAPIURL,
+		FrontendURL: defaultFrontendURL,
+		Shell:       ShellConfig{Windows: ShellWindowsPwsh},
 	}
 }
 
@@ -79,6 +87,14 @@ func LoadFromPaths(path string) (Config, error) {
 
 	if strings.TrimSpace(cfg.APIURL) == "" {
 		cfg.APIURL = defaultAPIURL
+	}
+
+	if envURL := strings.TrimSpace(os.Getenv(frontendURLEnvKey)); envURL != "" {
+		cfg.FrontendURL = envURL
+	}
+
+	if strings.TrimSpace(cfg.FrontendURL) == "" {
+		cfg.FrontendURL = defaultFrontendURL
 	}
 
 	// Apply shell defaults after YAML load so a config file that
@@ -114,8 +130,7 @@ func configPath() (string, error) {
 }
 
 // Save writes the config to ~/.papermap/config.yaml atomically with 0o600
-// permissions. The PAPERMAP_API_URL env override is intentionally NOT
-// persisted; only fields explicitly set on cfg are written.
+// permissions.
 func Save(cfg Config) error {
 	path, err := configPath()
 	if err != nil {
@@ -129,11 +144,16 @@ func saveConfigTo(path string, cfg Config) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	// Strip the default URL when persisting so the file stays minimal and
-	// future default changes propagate to users who never customised it.
+	// Strip the default URLs when persisting so the file stays minimal
+	// and future default changes propagate to users who never customised
+	// them. The PAPERMAP_*_URL env overrides are intentionally NOT
+	// persisted; only fields explicitly set on cfg are written.
 	persisted := cfg
 	if strings.TrimSpace(persisted.APIURL) == defaultAPIURL {
 		persisted.APIURL = ""
+	}
+	if strings.TrimSpace(persisted.FrontendURL) == defaultFrontendURL {
+		persisted.FrontendURL = ""
 	}
 	if persisted.Shell.Windows == ShellWindowsPwsh {
 		persisted.Shell.Windows = ""

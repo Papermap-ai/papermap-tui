@@ -252,6 +252,23 @@ type InsightStreamEvent struct {
 	// ResultPreview is an optional short result summary for
 	// tool_call_complete.
 	ResultPreview string
+
+	// Confirmation fields. Populated for `confirmation_required` events
+	// emitted when the agent wants to perform a privileged tool action
+	// (e.g. web search) and must wait for the user to allow or deny.
+	// The agent loop blocks server-side until the client POSTs to
+	// /api/v1/analytics/requests/confirm with a matching ConfirmationID.
+
+	// ConfirmationID is the opaque id the client must echo back in its
+	// confirm response. Carried as `confirmation_id` in the payload.
+	ConfirmationID string
+	// ActionDescription is a short human-readable summary of the action
+	// the agent wants to take (e.g. the search query plus result count).
+	// Falls back to ToolDisplayName when the backend omits it.
+	ActionDescription string
+	// TimeoutSeconds is the wall-clock budget the user has to respond.
+	// The backend defaults to 60s; treat <= 0 as "no countdown shown".
+	TimeoutSeconds int
 }
 
 type InsightStream struct {
@@ -512,7 +529,7 @@ func decodeSSEEvent(eventName string, dataLines []string) (InsightStreamEvent, b
 		lookupNestedString(raw, "data", "phase"),
 	)
 	message := ""
-	if typeName == "phase_update" {
+	if typeName == "phase_update" || typeName == "confirmation_required" {
 		message = firstRawString(
 			lookupRawString(raw, "message"),
 			lookupNestedRawString(raw, "data", "message"),
@@ -579,6 +596,19 @@ func populateTraceFields(event *InsightStreamEvent, raw map[string]any) {
 		lookupString(raw, "result_preview"),
 		lookupNestedString(raw, "data", "result_preview"),
 	)
+
+	event.ConfirmationID = firstString(
+		lookupString(raw, "confirmation_id"),
+		lookupNestedString(raw, "data", "confirmation_id"),
+	)
+	event.ActionDescription = firstString(
+		lookupString(raw, "action_description"),
+		lookupNestedString(raw, "data", "action_description"),
+	)
+	event.TimeoutSeconds = lookupInt(raw, "timeout_seconds")
+	if event.TimeoutSeconds == 0 {
+		event.TimeoutSeconds = lookupNestedInt(raw, "data", "timeout_seconds")
+	}
 }
 
 // ExtractTable returns a table parsed from an arbitrary response map if one
