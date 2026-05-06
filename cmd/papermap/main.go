@@ -29,7 +29,7 @@ const usage = `Papermap - terminal UI for Papermap Data Platform
 
 Usage:
   papermap [flags]              Launch the interactive TUI
-  papermap auth login           Sign in to Papermap
+  papermap auth login           Sign in to Papermap (opens browser)
   papermap auth logout          Sign out and clear local credentials
   papermap auth whoami          Show the signed-in user
   papermap workspace create     Create a database-backed workspace
@@ -41,8 +41,15 @@ Flags:
       --api-url <url>         Override the Papermap API base URL for this run
   -h, --help                  Show this help message
 
+Auth login flags:
+      --browser               Sign in via browser (default)
+      --password              Sign in via terminal email/password prompt
+      --email <email>         Pre-fill the email field (used with --password)
+      --frontend-url <url>    Override the Papermap web app base URL for this run
+
 Environment:
   PAPERMAP_API_URL            Override the API base URL (same as --api-url)
+  PAPERMAP_FRONTEND_URL       Override the frontend base URL (same as --frontend-url)
   PAPERMAP_FORCE_FILE_STORE   Force file-based credential storage
 
 Run 'papermap auth login' before launching the TUI.
@@ -129,20 +136,32 @@ func runAuth(args []string, stdout, stderr io.Writer) error {
 		fs := flag.NewFlagSet("auth login", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		var (
-			email  string
-			apiURL string
+			email       string
+			apiURL      string
+			frontendURL string
+			useBrowser  bool
+			usePassword bool
 		)
-		fs.StringVar(&email, "email", "", "Pre-fill the email field")
+		fs.StringVar(&email, "email", "", "Pre-fill the email field (used with --password)")
 		fs.StringVar(&apiURL, "api-url", "", "Override the Papermap API base URL for this run")
+		fs.StringVar(&frontendURL, "frontend-url", "", "Override the Papermap web app base URL for this run")
+		fs.BoolVar(&useBrowser, "browser", false, "Sign in via browser (default)")
+		fs.BoolVar(&usePassword, "password", false, "Sign in via terminal email/password prompt")
 		if err := fs.Parse(args[1:]); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return nil
 			}
 			return err
 		}
+		if useBrowser && usePassword {
+			return errors.New("--browser and --password are mutually exclusive")
+		}
 		return cliauth.RunLogin(context.Background(), stdout, cliauth.LoginOptions{
-			Email:          email,
-			APIURLOverride: apiURL,
+			Email:               email,
+			APIURLOverride:      apiURL,
+			FrontendURLOverride: frontendURL,
+			UseBrowser:          useBrowser,
+			UsePassword:         usePassword,
 		})
 	case "logout":
 		return cliauth.RunLogout(context.Background(), stdout)

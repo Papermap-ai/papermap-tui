@@ -20,6 +20,15 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// CLITokenRequest exchanges a one-time CLI authorization code (minted by
+// the frontend after a successful browser login) for normal access and
+// refresh tokens. State must match the value the TUI generated when it
+// started the browser login flow.
+type CLITokenRequest struct {
+	Code  string `json:"code"`
+	State string `json:"state"`
+}
+
 type AuthTokens struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
@@ -83,6 +92,28 @@ func (c *Client) Login(ctx context.Context, email string, password string) (Auth
 func (c *Client) Refresh(ctx context.Context, refreshToken string) (AuthTokens, error) {
 	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/auth/refresh", RefreshRequest{
 		RefreshToken: strings.TrimSpace(refreshToken),
+	}, false)
+	if err != nil {
+		return AuthTokens{}, err
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return AuthTokens{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return decodeJSONResponse[AuthTokens](resp)
+}
+
+// ExchangeCLICode swaps a one-time CLI authorization code (received via
+// the localhost browser-login callback) for normal access and refresh
+// tokens. The request is sent unauthenticated; the backend authenticates
+// the caller via the code itself.
+func (c *Client) ExchangeCLICode(ctx context.Context, code, state string) (AuthTokens, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/api/v1/auth/cli/token", CLITokenRequest{
+		Code:  strings.TrimSpace(code),
+		State: strings.TrimSpace(state),
 	}, false)
 	if err != nil {
 		return AuthTokens{}, err
