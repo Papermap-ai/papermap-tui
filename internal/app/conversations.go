@@ -333,10 +333,8 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 		m.chat.Clear()
 		return nil
 	case commandQuit:
-		m.confirmQuit = true
-		m.confirmQuitYes = false
 		m.screen = screenChat
-		return nil
+		return m.openQuitDialog()
 	}
 	m.screen = screenChat
 	return nil

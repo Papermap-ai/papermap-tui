@@ -83,24 +83,24 @@ func TestConfirmationModalDenyOnEnter(t *testing.T) {
 		60, client,
 	)
 
-	pc, ok := model.PendingConfirmation()
+	pd, ok := model.PendingDialog()
 	if !ok {
-		t.Fatal("expected pendingConfirmation after inject")
+		t.Fatal("expected dialog after inject")
 	}
-	if pc.AllowSelected {
-		t.Fatal("expected deny to be the default focused button")
+	if pd.FocusedActionID != "deny" {
+		t.Fatalf("expected deny focused, got %q", pd.FocusedActionID)
 	}
-	if pc.SecondsRemaining != 60 {
-		t.Fatalf("expected secondsRemaining 60, got %d", pc.SecondsRemaining)
+	if pd.SecondsRemaining != 60 {
+		t.Fatalf("expected secondsRemaining 60, got %d", pd.SecondsRemaining)
 	}
 
 	enter := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
 	next, cmd := model.Update(enter)
 	model = next.(app.Model)
 
-	pc, ok = model.PendingConfirmation()
-	if !ok || !pc.Submitting {
-		t.Fatalf("expected modal to remain open in submitting state, got pc=%+v ok=%v", pc, ok)
+	pd, ok = model.PendingDialog()
+	if !ok || !pd.Submitting {
+		t.Fatalf("expected dialog to remain open in submitting state, got pd=%+v ok=%v", pd, ok)
 	}
 
 	// Drive the cmd directly so we can inspect the resulting message.
@@ -115,8 +115,8 @@ func TestConfirmationModalDenyOnEnter(t *testing.T) {
 	// Feed the result back into Update; modal should clear.
 	next, _ = model.Update(msg)
 	model = next.(app.Model)
-	if _, ok := model.PendingConfirmation(); ok {
-		t.Fatal("expected pendingConfirmation cleared after successful submit")
+	if _, ok := model.PendingDialog(); ok {
+		t.Fatal("expected dialog cleared after successful submit")
 	}
 
 	// Validate backend payload.
@@ -162,9 +162,9 @@ func TestConfirmationModalAllowAfterTab(t *testing.T) {
 	next, _ := model.Update(tab)
 	model = next.(app.Model)
 
-	pc, _ := model.PendingConfirmation()
-	if !pc.AllowSelected {
-		t.Fatal("expected Allow focused after Tab")
+	pd, _ := model.PendingDialog()
+	if pd.FocusedActionID != "allow" {
+		t.Fatalf("expected allow focused after Tab, got %q", pd.FocusedActionID)
 	}
 
 	enter := tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
@@ -213,23 +213,25 @@ func TestConfirmationModalAutoDenyOnTickToZero(t *testing.T) {
 		requestID, confirmationID, "Web Search", "Allow?", "", 2, client,
 	)
 
+	correlationID := app.ConfirmationCorrelationID(confirmationID)
+
 	// First tick: 2 -> 1, no submit yet.
-	model, cmd := model.TickConfirmationForTest(requestID, confirmationID)
+	model, cmd := model.TickDialogForTest(correlationID)
 	if cmd == nil {
 		t.Fatal("expected next tick scheduled")
 	}
-	if pc, ok := model.PendingConfirmation(); !ok || pc.SecondsRemaining != 1 {
-		t.Fatalf("expected 1s remaining, got %+v ok=%v", pc, ok)
+	if pd, ok := model.PendingDialog(); !ok || pd.SecondsRemaining != 1 {
+		t.Fatalf("expected 1s remaining, got %+v ok=%v", pd, ok)
 	}
 
 	// Second tick: 1 -> 0, fires submit cmd.
-	model, cmd = model.TickConfirmationForTest(requestID, confirmationID)
+	model, cmd = model.TickDialogForTest(correlationID)
 	if cmd == nil {
 		t.Fatal("expected submit cmd at zero")
 	}
-	pc, ok := model.PendingConfirmation()
-	if !ok || !pc.Submitting {
-		t.Fatalf("expected modal in submitting state at zero, got %+v ok=%v", pc, ok)
+	pd, ok := model.PendingDialog()
+	if !ok || !pd.Submitting {
+		t.Fatalf("expected dialog in submitting state at zero, got %+v ok=%v", pd, ok)
 	}
 	msg := cmd()
 	if msg == nil {
@@ -237,8 +239,8 @@ func TestConfirmationModalAutoDenyOnTickToZero(t *testing.T) {
 	}
 	next, _ := model.Update(msg)
 	model = next.(app.Model)
-	if _, ok := model.PendingConfirmation(); ok {
-		t.Fatal("expected modal cleared after auto-deny submit")
+	if _, ok := model.PendingDialog(); ok {
+		t.Fatal("expected dialog cleared after auto-deny submit")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -258,9 +260,9 @@ func TestConfirmationModalAutoDenyOnTickToZero(t *testing.T) {
 	}
 }
 
-// TestConfirmationStaleTickIgnored verifies that a tick whose ids do not
-// match the active modal is dropped (e.g. left over from a previous
-// request).
+// TestConfirmationStaleTickIgnored verifies that a tick whose
+// correlation id does not match the active dialog is dropped (e.g.
+// left over from a previous request).
 func TestConfirmationStaleTickIgnored(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -279,11 +281,11 @@ func TestConfirmationStaleTickIgnored(t *testing.T) {
 		"req-fresh", "conf-fresh", "Web Search", "Allow?", "", 5, client,
 	)
 
-	model, cmd := model.TickConfirmationForTest("req-stale", "conf-stale")
+	model, cmd := model.TickDialogForTest(app.ConfirmationCorrelationID("conf-stale"))
 	if cmd != nil {
 		t.Fatal("stale tick should not schedule another tick")
 	}
-	if pc, _ := model.PendingConfirmation(); pc.SecondsRemaining != 5 {
-		t.Fatalf("expected countdown unchanged on stale tick, got %d", pc.SecondsRemaining)
+	if pd, _ := model.PendingDialog(); pd.SecondsRemaining != 5 {
+		t.Fatalf("expected countdown unchanged on stale tick, got %d", pd.SecondsRemaining)
 	}
 }

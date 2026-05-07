@@ -82,36 +82,43 @@ func (m Model) CancelNotice() string {
 	return m.cancelNotice
 }
 
-// PendingConfirmationFields exposes the active approval modal's state
-// to tests so they can assert focus / countdown / submission status
-// without poking at the unexported pendingConfirmation field directly.
-// Returns an empty struct and false when no modal is active.
-type PendingConfirmationView struct {
-	RequestID         string
-	ConfirmationID    string
-	ToolDisplayName   string
-	Message           string
-	ActionDescription string
-	SecondsRemaining  int
-	AllowSelected     bool
-	Submitting        bool
+// PendingDialogView exposes the active dialog's state to tests so they
+// can assert focus / countdown / submission status without poking at
+// the unexported pendingDialog field directly.
+type PendingDialogView struct {
+	CorrelationID    string
+	Title            string
+	Body             string
+	Detail           string
+	ActionIDs        []string
+	FocusedActionID  string
+	SecondsRemaining int
+	Submitting       bool
 }
 
-// PendingConfirmation reports the active approval modal state.
-func (m Model) PendingConfirmation() (PendingConfirmationView, bool) {
-	pc := m.pendingConfirmation
-	if pc == nil {
-		return PendingConfirmationView{}, false
+// PendingDialog reports the active dialog state.
+func (m Model) PendingDialog() (PendingDialogView, bool) {
+	pd := m.dialog
+	if pd == nil {
+		return PendingDialogView{}, false
 	}
-	return PendingConfirmationView{
-		RequestID:         pc.requestID,
-		ConfirmationID:    pc.confirmationID,
-		ToolDisplayName:   pc.toolDisplayName,
-		Message:           pc.message,
-		ActionDescription: pc.actionDescription,
-		SecondsRemaining:  pc.secondsRemaining,
-		AllowSelected:     pc.allowSelected,
-		Submitting:        pc.submitting,
+	ids := make([]string, len(pd.request.Actions))
+	for i, action := range pd.request.Actions {
+		ids[i] = action.ID
+	}
+	focused := ""
+	if pd.focusedIdx >= 0 && pd.focusedIdx < len(pd.request.Actions) {
+		focused = pd.request.Actions[pd.focusedIdx].ID
+	}
+	return PendingDialogView{
+		CorrelationID:    pd.correlationID,
+		Title:            pd.request.Title,
+		Body:             pd.request.Body,
+		Detail:           pd.request.Detail,
+		ActionIDs:        ids,
+		FocusedActionID:  focused,
+		SecondsRemaining: pd.secondsLeft,
+		Submitting:       pd.submitting,
 	}, true
 }
 
@@ -138,13 +145,17 @@ func (m Model) InjectConfirmationRequiredForTest(
 	return updated.(Model), cmd
 }
 
-// TickConfirmationForTest pushes a single countdown tick into Update.
-func (m Model) TickConfirmationForTest(requestID, confirmationID string) (Model, tea.Cmd) {
-	updated, cmd := m.Update(confirmationTickMsg{
-		requestID:      requestID,
-		confirmationID: confirmationID,
-	})
+// TickDialogForTest pushes a single countdown tick into Update for the
+// dialog with the given correlation id.
+func (m Model) TickDialogForTest(correlationID string) (Model, tea.Cmd) {
+	updated, cmd := m.Update(dialogTickMsg{correlationID: correlationID})
 	return updated.(Model), cmd
+}
+
+// ConfirmationCorrelationID returns the correlation id used for SSE
+// confirmation dialogs so tests can address the active dialog by id.
+func ConfirmationCorrelationID(confirmationID string) string {
+	return "conf:" + confirmationID
 }
 
 // ScreenCommandPalette is the screen identifier for the palette overlay.
