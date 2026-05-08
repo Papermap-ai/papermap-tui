@@ -19,8 +19,8 @@ import (
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 	"github.com/papermap/papermap-tui/internal/ui/chat/conversations"
 	"github.com/papermap/papermap-tui/internal/ui/chat/modelpicker"
-	"github.com/papermap/papermap-tui/internal/ui/components"
 	"github.com/papermap/papermap-tui/internal/ui/components/charts"
+	"github.com/papermap/papermap-tui/internal/ui/components/dialog"
 	"github.com/papermap/papermap-tui/internal/ui/components/palette"
 	"github.com/papermap/papermap-tui/internal/ui/landing"
 	"github.com/papermap/papermap-tui/internal/ui/workspace"
@@ -156,36 +156,14 @@ type confirmationRequiredMsg struct {
 	timeoutSeconds    int
 }
 
-// confirmationTickMsg drives the per-second countdown for the active
-// approval modal. The modal auto-denies when the remaining budget hits
-// zero, so the tick loop is also the auto-deny trigger.
-type confirmationTickMsg struct {
-	requestID      string
-	confirmationID string
-}
-
 // confirmationSubmittedMsg carries the result of submitting the user's
-// decision. On error the modal stays open and a transient notice is
-// surfaced via cancelNotice; on success the modal is dismissed.
+// decision. On error the dialog stays open and a transient notice is
+// surfaced via cancelNotice; on success the stream is resumed.
 type confirmationSubmittedMsg struct {
 	requestID      string
 	confirmationID string
 	confirmed      bool
 	err            string
-}
-
-// pendingConfirmation tracks the in-flight approval modal state. The
-// backend serializes confirmations (one slot per agent run), so a single
-// pointer is sufficient.
-type pendingConfirmation struct {
-	requestID         string
-	confirmationID    string
-	toolDisplayName   string
-	message           string
-	actionDescription string
-	secondsRemaining  int
-	allowSelected     bool
-	submitting        bool
 }
 
 type Model struct {
@@ -220,8 +198,10 @@ type Model struct {
 	conversations    conversations.Model
 	store            *auth.TokenStore
 	spinner          spinner.Model
-	confirmQuit      bool
-	confirmQuitYes   bool
+	// dialog tracks the in-flight confirmation modal (quit confirm or
+	// SSE tool-call approval). At most one is active at a time; see
+	// internal/app/dialog.go for the controller.
+	dialog *pendingDialog
 	// insightCancel is the cancel func for the in-flight insight request.
 	// It is set when startInsight kicks off and called from cancelInsight
 	// on user-initiated teardown (Clear / switch workspace / quit /
@@ -255,11 +235,6 @@ type Model struct {
 	// and so a missing pwsh.exe surfaces a clean error before the
 	// TUI starts. Empty on platforms that resolve lazily (none today).
 	shellPath string
-	// pendingConfirmation tracks an active tool-call approval modal.
-	// Non-nil means the SSE stream is paused server-side waiting on
-	// the user's decision; the modal owns keyboard focus until
-	// dismissed (allow / deny / auto-deny / submit error retry).
-	pendingConfirmation *pendingConfirmation
 }
 
 func Run() error {
@@ -395,8 +370,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleInsightCancelled(msg)
 	case confirmationRequiredMsg:
 		return m.handleConfirmationRequired(msg)
-	case confirmationTickMsg:
-		return m.handleConfirmationTick(msg)
+	case dialogTickMsg:
+		return m.handleDialogTick(msg)
 	case confirmationSubmittedMsg:
 		return m.handleConfirmationSubmitted(msg)
 	case tea.KeyPressMsg:
@@ -623,7 +598,7 @@ func (m Model) handleInsightCancelled(msg insightCancelledMsg) (tea.Model, tea.C
 	return m, nil
 }
 
-// handleConfirmationRequired opens the approval modal and primes the
+// handleConfirmationRequired opens the approval dialog and primes the
 // countdown tick loop. Subsequent SSE events are blocked server-side
 // until SubmitConfirmation lands, so the chat status line is parked at
 // "Awaiting confirmation..." until then.
@@ -638,117 +613,102 @@ func (m Model) handleConfirmationRequired(msg confirmationRequiredMsg) (tea.Mode
 		return m, m.continueInsightStream()
 	}
 
-	m.pendingConfirmation = &pendingConfirmation{
-		requestID:         requestID,
-		confirmationID:    confirmationID,
-		toolDisplayName:   msg.toolDisplayName,
-		message:           msg.message,
-		actionDescription: msg.actionDescription,
-		secondsRemaining:  msg.timeoutSeconds,
-		allowSelected:     false,
-	}
+	correlationID := "conf:" + confirmationID
+	req := approvalRequest(msg)
+	onResult := m.submitConfirmationCallback(requestID, confirmationID)
+	cmd := m.openDialog(correlationID, req, onResult)
 	m.chat.SetStreamStatus("Awaiting confirmation...")
-
-	if msg.timeoutSeconds > 0 {
-		return m, confirmationTickCmd(requestID, confirmationID)
-	}
-	return m, nil
+	return m, cmd
 }
 
-// handleConfirmationTick advances the visible countdown by one second
-// and triggers an automatic deny when the budget hits zero. Stale ticks
-// (mismatched ids) are ignored so a dismissed modal cannot fire a late
-// auto-deny on a fresh request.
-func (m Model) handleConfirmationTick(msg confirmationTickMsg) (tea.Model, tea.Cmd) {
-	pc := m.pendingConfirmation
-	if pc == nil || pc.submitting {
-		return m, nil
+// approvalRequest builds the dialog.Request for an SSE tool-call
+// approval. Title/body/detail mirror the pre-refactor ApprovalDialog
+// layout: header is the tool display name, body is the human-readable
+// prompt from the backend, detail is the verbose action description.
+func approvalRequest(msg confirmationRequiredMsg) dialog.Request {
+	title := strings.TrimSpace(msg.toolDisplayName)
+	if title == "" {
+		title = "Tool call approval"
 	}
-	if pc.requestID != msg.requestID || pc.confirmationID != msg.confirmationID {
-		return m, nil
+	body := strings.TrimSpace(msg.message)
+	if body == "" {
+		body = "The agent wants to run a tool. Approve?"
 	}
-
-	pc.secondsRemaining--
-	if pc.secondsRemaining <= 0 {
-		pc.secondsRemaining = 0
-		return m.submitConfirmation(false)
+	return dialog.Request{
+		Title:  title,
+		Body:   body,
+		Detail: strings.TrimSpace(msg.actionDescription),
+		Actions: []dialog.Action{
+			{ID: "deny", Label: "Deny", Tone: dialog.ToneDanger, Hotkey: 'n'},
+			{ID: "allow", Label: "Allow", Tone: dialog.ToneAccept, Hotkey: 'y'},
+		},
+		DefaultID:   "deny",
+		DismissID:   "deny",
+		TimeoutSecs: msg.timeoutSeconds,
+		TimeoutAct:  "deny",
 	}
-	return m, confirmationTickCmd(pc.requestID, pc.confirmationID)
 }
 
-// handleConfirmationSubmitted clears the modal on success or surfaces a
-// transient notice on failure so the user can retry.
+// submitConfirmationCallback returns the resolution callback that the
+// dialog invokes when the user picks allow or deny (or the timeout
+// fires the auto-deny). The callback returns keepOpen=true so the
+// modal stays visible during the in-flight POST; on backend success
+// handleConfirmationSubmitted clears it, on failure the user can retry.
+func (m Model) submitConfirmationCallback(requestID, confirmationID string) func(string) (tea.Cmd, bool) {
+	client := m.client
+	return func(actionID string) (tea.Cmd, bool) {
+		if client == nil {
+			return nil, false
+		}
+		allow := actionID == "allow"
+		cmd := func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := client.SubmitConfirmation(ctx, api.SubmitConfirmationRequest{
+				RequestID:      requestID,
+				ConfirmationID: confirmationID,
+				Confirmed:      allow,
+			})
+			if err != nil {
+				return confirmationSubmittedMsg{
+					requestID:      requestID,
+					confirmationID: confirmationID,
+					confirmed:      allow,
+					err:            err.Error(),
+				}
+			}
+			return confirmationSubmittedMsg{
+				requestID:      requestID,
+				confirmationID: confirmationID,
+				confirmed:      allow,
+			}
+		}
+		return cmd, true
+	}
+}
+
+// handleConfirmationSubmitted clears the dialog on success or surfaces
+// a transient notice on failure so the user can retry. The retry path
+// flips the submitting flag back off so the existing dialog regains
+// keyboard focus without rebuilding it.
 func (m Model) handleConfirmationSubmitted(msg confirmationSubmittedMsg) (tea.Model, tea.Cmd) {
-	pc := m.pendingConfirmation
-	if pc == nil {
-		return m, nil
-	}
-	if pc.requestID != msg.requestID || pc.confirmationID != msg.confirmationID {
-		return m, nil
-	}
-
+	correlationID := "conf:" + msg.confirmationID
 	if msg.err != "" {
-		pc.submitting = false
+		if m.dialog != nil && m.dialog.correlationID == correlationID {
+			m.dialog.submitting = false
+		}
 		m.cancelNotice = "Could not submit decision: " + msg.err
 		return m, nil
 	}
 
-	m.pendingConfirmation = nil
+	if m.dialog != nil && m.dialog.correlationID == correlationID {
+		m.closeDialog()
+	}
 	m.chat.SetStreamStatus("")
 	if m.stream != nil {
 		return m, m.continueInsightStream()
 	}
 	return m, nil
-}
-
-// submitConfirmation marks the modal as submitting and returns a cmd
-// that POSTs the user's decision. The modal stays visible until the
-// response lands so a network error can keep the user in the loop
-// instead of silently dropping the stream into a stuck state.
-func (m Model) submitConfirmation(allow bool) (tea.Model, tea.Cmd) {
-	pc := m.pendingConfirmation
-	if pc == nil || pc.submitting || m.client == nil {
-		return m, nil
-	}
-	pc.submitting = true
-
-	requestID := pc.requestID
-	confirmationID := pc.confirmationID
-	client := m.client
-
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, err := client.SubmitConfirmation(ctx, api.SubmitConfirmationRequest{
-			RequestID:      requestID,
-			ConfirmationID: confirmationID,
-			Confirmed:      allow,
-		})
-		if err != nil {
-			return confirmationSubmittedMsg{
-				requestID:      requestID,
-				confirmationID: confirmationID,
-				confirmed:      allow,
-				err:            err.Error(),
-			}
-		}
-		return confirmationSubmittedMsg{
-			requestID:      requestID,
-			confirmationID: confirmationID,
-			confirmed:      allow,
-		}
-	}
-}
-
-// confirmationTickCmd schedules the next per-second countdown tick for
-// the active approval modal.
-func confirmationTickCmd(requestID, confirmationID string) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg {
-		return confirmationTickMsg{
-			requestID:      requestID,
-			confirmationID: confirmationID,
-		}
-	})
 }
 
 // userCancelInsight performs the synchronous teardown of an in-flight
@@ -784,20 +744,20 @@ func (m *Model) userCancelInsight() tea.Cmd {
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.confirmQuit {
-		return m.updateQuitConfirm(msg)
-	}
-
+	// Ctrl+C precedence: when a dialog is in flight ctrl+c short-
+	// circuits to either dismiss the quit confirm + force quit, or
+	// (for any other dialog) raise the quit confirm. The quit
+	// dialog's own "y" hotkey path is handled inside updateDialog.
 	if msg.String() == keyQuit {
-		m.confirmQuit = true
-		m.confirmQuitYes = false
-		return m, nil
+		if m.dialog != nil && m.dialog.correlationID == quitDialogID {
+			// Second ctrl+c while quit confirm is up = force quit.
+			return m, tea.Quit
+		}
+		return m, m.openQuitDialog()
 	}
 
-	// Approval modal owns focus while in flight (except for ctrl+c
-	// which is handled above so quit always reaches the user).
-	if m.pendingConfirmation != nil {
-		return m.updateApprovalConfirm(msg)
+	if m.dialog != nil {
+		return m.updateDialog(msg)
 	}
 
 	if m.screen == screenCommandPalette {
@@ -955,12 +915,8 @@ func (m Model) View() tea.View {
 		base = m.overlayConversations(base)
 	}
 
-	if m.pendingConfirmation != nil {
-		base = m.overlayApprovalDialog(base)
-	}
-
-	if m.confirmQuit {
-		base = m.overlayQuitDialog(base)
+	if m.dialog != nil {
+		base = m.overlayDialog(base)
 	}
 
 	v := tea.NewView(base)
@@ -969,31 +925,31 @@ func (m Model) View() tea.View {
 	return v
 }
 
-func (m Model) overlayQuitDialog(base string) string {
-	dialog := components.ConfirmDialog{
-		Title:       "Are you sure you want to quit?",
-		Yes:         "Yep!",
-		No:          "Nope",
-		YesSelected: m.confirmQuitYes,
-	}
-	return m.centerOverlay(base, dialog.View(m.theme, m.width))
-}
+// quitDialogID is the correlation id used for the "are you sure you
+// want to quit?" confirm. Unique per app run; ctrl+c routing keys off
+// this id so a second ctrl+c on the quit dialog force-quits.
+const quitDialogID = "quit"
 
-// overlayApprovalDialog composites the tool-call approval modal over the
-// current screen. The modal owns keyboard focus while visible.
-func (m Model) overlayApprovalDialog(base string) string {
-	pc := m.pendingConfirmation
-	if pc == nil {
-		return base
+// openQuitDialog stages the quit confirmation. Returns the (nil)
+// schedule cmd for the dialog so the call site can return it directly
+// in the same tea.Cmd slot the previous implementation used.
+func (m *Model) openQuitDialog() tea.Cmd {
+	req := dialog.Request{
+		Title: "Are you sure you want to quit?",
+		Actions: []dialog.Action{
+			{ID: "no", Label: "Nope", Tone: dialog.ToneNeutral, Hotkey: 'n'},
+			{ID: "yes", Label: "Yep!", Tone: dialog.ToneAccept, Hotkey: 'y'},
+		},
+		DefaultID: "no",
+		DismissID: "no",
 	}
-	dialog := components.ApprovalDialog{
-		ToolDisplayName:   pc.toolDisplayName,
-		Message:           pc.message,
-		ActionDescription: pc.actionDescription,
-		SecondsRemaining:  pc.secondsRemaining,
-		AllowSelected:     pc.allowSelected,
+	onResult := func(actionID string) (tea.Cmd, bool) {
+		if actionID == "yes" {
+			return m.quitWithCancel(), false
+		}
+		return nil, false
 	}
-	return m.centerOverlay(base, dialog.View(m.theme, m.width))
+	return m.openDialog(quitDialogID, req, onResult)
 }
 
 // centerOverlay composites overlay over base with the overlay centered both
@@ -1021,58 +977,6 @@ func (m Model) centerOverlay(base, overlay string) string {
 	baseLayer := lipgloss.NewLayer(base).Z(0)
 	overlayLayer := lipgloss.NewLayer(overlay).X(x).Y(y).Z(1)
 	return lipgloss.NewCompositor(baseLayer, overlayLayer).Render()
-}
-
-func (m Model) updateQuitConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "left", "right", "tab", "shift+tab", "h", "l":
-		m.confirmQuitYes = !m.confirmQuitYes
-		return m, nil
-	case "y", "Y":
-		return m, m.quitWithCancel()
-	case "n", "N", keyEscape:
-		m.confirmQuit = false
-		m.confirmQuitYes = false
-		return m, nil
-	case keyEnter:
-		if m.confirmQuitYes {
-			return m, m.quitWithCancel()
-		}
-		m.confirmQuit = false
-		m.confirmQuitYes = false
-		return m, nil
-	case keyQuit:
-		// A second ctrl+c force-quits as an escape hatch.
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-// updateApprovalConfirm handles keypresses while the tool-call approval
-// modal is in flight. Tab / arrows / h / l switch the focused button;
-// y / a allow; n / esc deny; Enter submits the focused choice. Once a
-// submit is in flight (pc.submitting), only ctrl+c remains responsive.
-func (m Model) updateApprovalConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	pc := m.pendingConfirmation
-	if pc == nil {
-		return m, nil
-	}
-	if pc.submitting {
-		return m, nil
-	}
-
-	switch msg.String() {
-	case "left", "right", "tab", "shift+tab", "h", "l":
-		pc.allowSelected = !pc.allowSelected
-		return m, nil
-	case "y", "Y", "a", "A":
-		return m.submitConfirmation(true)
-	case "n", "N", keyEscape:
-		return m.submitConfirmation(false)
-	case keyEnter:
-		return m.submitConfirmation(pc.allowSelected)
-	}
-	return m, nil
 }
 
 // quitWithCancel tears down any in-flight insight request and fires a
@@ -1828,9 +1732,10 @@ func (m *Model) resetInsightState() {
 	// Drop the cancel reference; the request has terminated (success or
 	// failure) and any later teardown should be a no-op.
 	m.insightCancel = nil
-	// Drop any pending approval modal: the request that produced it is
-	// gone, so allowing or denying it can no longer affect the agent.
-	m.pendingConfirmation = nil
+	// Drop any pending approval modal: the request that produced it
+	// is gone, so allowing or denying it can no longer affect the
+	// agent.
+	m.closeDialog()
 }
 
 // tryFinalizeInsight renders the final assistant message once BOTH the HTTP
@@ -1916,11 +1821,11 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 		}
 
 	default:
-		// Bar and pie render via the charts package. Line, area,
-		// scatter, radar, and any unknown types fall through to the
-		// chart-type badge added by the chat renderer. The legacy
-		// extractor stays in play as a final fallback so ad-hoc
-		// table-shaped payloads remain visible.
+		// Bar, line, pie, scatter, area, and radar render via the
+		// charts package. Unknown types fall through to the chart-type
+		// badge added by the chat renderer. The legacy extractor stays
+		// in play as a final fallback so ad-hoc table-shaped payloads
+		// remain visible.
 		if charts.IsSupported(chartType) {
 			table := api.BuildDataRowsTable(response.RawDataJSON)
 			if table == nil {

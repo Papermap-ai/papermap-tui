@@ -99,7 +99,7 @@ func TestRender_PanicResistance(t *testing.T) {
 		},
 	}
 
-	chartTypes := []string{"bar", "pie"}
+	chartTypes := []string{"bar", "pie", "line", "area", "scatter", "radar"}
 	sizes := []Size{
 		{Width: 60, Height: 10},
 		{Width: 30, Height: 6},

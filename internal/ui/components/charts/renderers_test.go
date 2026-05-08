@@ -78,21 +78,16 @@ func TestRender_DispatchesByType(t *testing.T) {
 	t.Parallel()
 	tbl := growingTable(4)
 	cfg := api.ChartConfig{LabelKey: "name", YKey: "value"}
-	for _, ct := range []string{"bar", "pie"} {
-		out := Render(ct, DefaultPalette(), tbl, cfg, Size{Width: 50, Height: 8})
+	for _, ct := range []string{"bar", "pie", "line", "area", "scatter", "radar"} {
+		out := Render(ct, DefaultPalette(), tbl, cfg, Size{Width: 60, Height: 12})
 		if out == "" {
 			t.Errorf("Render(%q) returned empty", ct)
-		}
-	}
-	for _, ct := range []string{"line", "area", "scatter", "radar"} {
-		if Render(ct, DefaultPalette(), tbl, cfg, Size{Width: 50, Height: 8}) != "" {
-			t.Errorf("Render(%q) should not be registered", ct)
 		}
 	}
 	if !IsSupported("BAR") {
 		t.Errorf("IsSupported should be case-insensitive")
 	}
-	for _, ct := range []string{"line", "area", "scatter", "radar"} {
+	for _, ct := range []string{"bubble", "treemap", ""} {
 		if IsSupported(ct) {
 			t.Errorf("IsSupported(%q) should return false", ct)
 		}
