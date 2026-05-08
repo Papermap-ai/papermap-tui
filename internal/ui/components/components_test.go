@@ -98,7 +98,7 @@ func TestChartBadgeUnsupportedTypes(t *testing.T) {
 
 	th := theme.Default()
 
-	for _, kind := range []string{"bar", "line", "pie", "scatter", "area", "radar"} {
+	for _, kind := range []string{"bubble", "treemap", "heatmap", "sankey"} {
 		out := stripANSI(components.ChartBadge(th, kind))
 		if !strings.Contains(out, "[chart: "+kind+"]") {
 			t.Fatalf("expected badge for %q, got %q", kind, out)
@@ -110,7 +110,11 @@ func TestChartBadgeOmittedForRenderedTypes(t *testing.T) {
 	t.Parallel()
 
 	th := theme.Default()
-	for _, kind := range []string{"", "table", "tile", "TABLE", " Tile "} {
+	for _, kind := range []string{
+		"", "table", "tile", "TABLE", " Tile ",
+		"bar", "line", "pie", "scatter", "area", "radar",
+		"BAR", " Line ", "AREA",
+	} {
 		if got := components.ChartBadge(th, kind); got != "" {
 			t.Fatalf("expected empty badge for %q, got %q", kind, got)
 		}

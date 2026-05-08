@@ -1821,11 +1821,11 @@ func buildAssistantMessage(response *api.InsightResponse) chat.Message {
 		}
 
 	default:
-		// Bar and pie render via the charts package. Line, area,
-		// scatter, radar, and any unknown types fall through to the
-		// chart-type badge added by the chat renderer. The legacy
-		// extractor stays in play as a final fallback so ad-hoc
-		// table-shaped payloads remain visible.
+		// Bar, line, pie, scatter, area, and radar render via the
+		// charts package. Unknown types fall through to the chart-type
+		// badge added by the chat renderer. The legacy extractor stays
+		// in play as a final fallback so ad-hoc table-shaped payloads
+		// remain visible.
 		if charts.IsSupported(chartType) {
 			table := api.BuildDataRowsTable(response.RawDataJSON)
 			if table == nil {
