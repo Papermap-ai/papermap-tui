@@ -29,5 +29,6 @@
 - [x] Figure out how to add new workspaces from the UI
 - [x] fix the scroll down issue when in shell mode and then you run a shell command 
 - [x] add a verification step when it comes to web search and a way to toggle it on and off
-- [ ] edit the sign in experience to align with that of codex
-- [ ] figure out a way to render some of the other charts
+- [x] edit the sign in experience to align with that of codex
+- [x] make the web search tool verification thing general 
+- [x] figure out a way to render some of the other charts

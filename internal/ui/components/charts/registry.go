@@ -68,6 +68,10 @@ func IsSupported(chartType string) bool {
 // extended. Adding a new chart type is one new file plus one new entry
 // in this map.
 var registry = map[string]Renderer{
-	"bar": Bar,
-	"pie": Pie,
+	"bar":     Bar,
+	"pie":     Pie,
+	"line":    Line,
+	"area":    Area,
+	"scatter": Scatter,
+	"radar":   Radar,
 }
