@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.5.0...v0.6.0) (2026-05-08)
+
+
+### Features
+
+* **charts:** render line, area, scatter, and radar natively ([1a71f4d](https://github.com/Papermap-ai/papermap-tui/commit/1a71f4dfc7096c3633ea8b2171c634ff01ff2dcc))
+
+
+### Refactors
+
+* **dialog:** unify approval and quit confirm into generic primitive ([02e0b01](https://github.com/Papermap-ai/papermap-tui/commit/02e0b01a124741d9ecd29d7015579adc71735263))
+
 ## [0.5.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.4.0...v0.5.0) (2026-05-06)
 
 
