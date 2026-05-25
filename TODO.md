@@ -32,3 +32,6 @@
 - [x] edit the sign in experience to align with that of codex
 - [x] make the web search tool verification thing general 
 - [x] figure out a way to render some of the other charts
+- [x] check out the token expiring issue where the token refresh doesn't get called in time when a query is being made
+
+
