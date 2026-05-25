@@ -34,7 +34,10 @@ func NewClient(baseURL string, httpClient *http.Client, tokenSource TokenSource)
 	}
 
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: defaultCheckRedirect(),
+		}
 	}
 
 	return &Client{
@@ -42,6 +45,20 @@ func NewClient(baseURL string, httpClient *http.Client, tokenSource TokenSource)
 		httpClient:  httpClient,
 		tokenSource: tokenSource,
 	}, nil
+}
+
+func defaultCheckRedirect() func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		// Strip Authorization header on cross-host redirects.
+		// Same-host redirects (e.g. http -> https) are preserved.
+		if via[0].URL.Host != req.URL.Host {
+			req.Header.Del("Authorization")
+		}
+		return nil
+	}
 }
 
 func (c *Client) NewRequest(ctx context.Context, method string, requestPath string, body any) (*http.Request, error) {
