@@ -233,6 +233,96 @@ func TestCheckResponseStatusIncludesBody(t *testing.T) {
 	}
 }
 
+func TestToCredentialsFailsClosedOnPartialRefresh(t *testing.T) {
+	t.Parallel()
+
+	existing := auth.Credentials{
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+		User: auth.User{
+			UserID: "user-1",
+			Email:  "user@example.com",
+		},
+	}
+
+	cases := []struct {
+		name    string
+		tokens  api.AuthTokens
+		wantErr string
+	}{
+		{
+			name: "missing access token",
+			tokens: api.AuthTokens{
+				AccessToken:  "",
+				RefreshToken: "new-refresh-token",
+			},
+			wantErr: "missing access token",
+		},
+		{
+			name: "missing refresh token",
+			tokens: api.AuthTokens{
+				AccessToken:  jwtForTest(time.Now().Add(time.Hour)),
+				RefreshToken: "",
+			},
+			wantErr: "missing refresh token",
+		},
+		{
+			name: "both tokens missing",
+			tokens: api.AuthTokens{
+				AccessToken:  "  ",
+				RefreshToken: "  ",
+			},
+			wantErr: "missing access token",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tc.tokens.ToCredentials(existing)
+			if err == nil {
+				t.Fatal("expected error for partial refresh response")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestToCredentialsPreservesUserOnRefresh(t *testing.T) {
+	t.Parallel()
+
+	existing := auth.Credentials{
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+		User: auth.User{
+			UserID: "user-1",
+			Email:  "user@example.com",
+		},
+	}
+
+	tokens := api.AuthTokens{
+		AccessToken:  jwtForTest(time.Now().Add(time.Hour)),
+		RefreshToken: "new-refresh-token",
+		// User intentionally omitted.
+	}
+
+	cred, err := tokens.ToCredentials(existing)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cred.User.UserID != "user-1" {
+		t.Fatalf("expected user info preserved, got %+v", cred.User)
+	}
+	if cred.AccessToken != tokens.AccessToken {
+		t.Fatalf("expected access token updated")
+	}
+	if cred.RefreshToken != tokens.RefreshToken {
+		t.Fatalf("expected refresh token updated")
+	}
+}
+
 func jwtForTest(expiresAt time.Time) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":` + strconv.FormatInt(expiresAt.Unix(), 10) + `}`))
