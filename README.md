@@ -15,8 +15,6 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](
 
 ### Install script (Linux / macOS)
 
-> **Heads up — repo is private right now.** Both the install script and `go install` need a GitHub token until the repo is public. See [Private-repo install](#private-repo-install) below. Once the repo is public, the plain commands in this section will Just Work and the token plumbing in `install.sh` should be removed (search for `TODO(public-repo)` in `install.sh`).
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
@@ -30,29 +28,10 @@ PREFIX=$HOME/.local VERSION=v0.0.1 \
     curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 ```
 
-### Private-repo install
-
-While the repo is private you need a GitHub personal access token with `repo:read` (classic) or `Contents: read` (fine-grained) scope. Export it once and pipe the script through `sh` — the piped shell inherits `GH_TOKEN` from your environment automatically.
-
-```bash
-export GH_TOKEN=ghp_xxx && curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
-```
-
-`GITHUB_TOKEN` is accepted as an alias for `GH_TOKEN`.
-
-Treat the token like a password: don't paste it into shared docs or commit it. Revoke it from <https://github.com/settings/tokens> when you're done.
-
 ### Go install
 
 ```bash
 go install github.com/papermap/papermap-tui/cmd/papermap@latest
-```
-
-While the repo is private, `go install` also needs auth. Set:
-
-```bash
-export GOPRIVATE=github.com/Papermap-ai/*
-# Plus a git credential helper or SSH key with read access to the repo.
 ```
 
 ### From source
@@ -155,23 +134,24 @@ to opt into `cmd.exe` instead.
 
 Configuration is loaded from `~/.papermap/config.yaml`. Environment variables take precedence.
 
-| Setting       | Config key       | Env var             | Default                            |
-| ------------- | ---------------- | ------------------- | ---------------------------------- |
-| API URL       | `api_url`        | `PAPERMAP_API_URL`  | `https://dataapi.papermap.ai`  |
-| Windows shell | `shell.windows`  | —                   | `pwsh`                             |
+| Setting       | Config key      | Env var                        | Default                      |
+| ------------- | --------------- | ------------------------------ | ---------------------------- |
+| API URL       | `api_url`       | `PAPERMAP_API_URL`             | `https://dataapi.papermap.ai` |
+| Frontend URL  | `frontend_url`  | `PAPERMAP_FRONTEND_URL`        | `https://papermap.ai`        |
+| Windows shell | `shell.windows` | —                              | `pwsh`                       |
 
 Example `~/.papermap/config.yaml`:
 
 ```yaml
 api_url: https://dataapi.papermap.ai
+frontend_url: https://papermap.ai
 ```
 
-Point at the production API for one run:
+For safety, browser login only allows `https://papermap.ai` (and
+`https://www.papermap.ai`) by default. Internal/dev frontends require:
 
 ```bash
-papermap --api-url https://dataapi.papermap.ai
-# or
-PAPERMAP_API_URL=https://dataapi.papermap.ai papermap
+PAPERMAP_ALLOW_UNTRUSTED_FRONTEND=1 papermap auth login --frontend-url https://internal-frontend.example
 ```
 
 ### Windows shell selection
@@ -237,6 +217,10 @@ internal/theme/           # Lipgloss palette and shared styles
 internal/ui/              # Bubble Tea screen models (landing/chat/workspace)
 internal/app/             # Root app model and orchestration
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, and pull request guidelines.
 
 ## Releasing
 

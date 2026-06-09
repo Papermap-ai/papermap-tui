@@ -10,6 +10,7 @@ func TestSaveLoadRoundtripPersistsSelectedModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	cfg := Config{
 		APIURL:        "https://custom.example",
@@ -35,6 +36,7 @@ func TestSaveOmitsSelectedModelWhenEmpty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: "https://custom.example"}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -53,6 +55,7 @@ func TestSaveStripsDefaultAPIURL(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: defaultAPIURL, SelectedModel: "x"}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -90,6 +93,7 @@ func TestLoadDefaultsShellWindowsPwsh(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	got, err := Load()
 	if err != nil {
@@ -104,6 +108,7 @@ func TestLoadAcceptsShellWindowsCmd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	dir := filepath.Join(home, ".papermap")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -127,6 +132,7 @@ func TestLoadRejectsInvalidShellWindows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	dir := filepath.Join(home, ".papermap")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -146,6 +152,7 @@ func TestSaveStripsDefaultShellWindows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(apiURLEnvKey, "")
+	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: defaultAPIURL, Shell: ShellConfig{Windows: ShellWindowsPwsh}}); err != nil {
 		t.Fatalf("Save: %v", err)

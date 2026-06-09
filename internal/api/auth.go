@@ -45,20 +45,16 @@ type responseEnvelope[T any] struct {
 
 func (t AuthTokens) ToCredentials(existing auth.Credentials) (auth.Credentials, error) {
 	cred := existing
-	if strings.TrimSpace(t.AccessToken) != "" {
-		cred.AccessToken = t.AccessToken
-	}
-	if strings.TrimSpace(t.RefreshToken) != "" {
-		cred.RefreshToken = t.RefreshToken
-	}
+	cred.AccessToken = strings.TrimSpace(t.AccessToken)
+	cred.RefreshToken = strings.TrimSpace(t.RefreshToken)
 	if t.User != (auth.User{}) {
 		cred.User = t.User
 	}
 
-	if strings.TrimSpace(cred.AccessToken) == "" {
+	if cred.AccessToken == "" {
 		return auth.Credentials{}, fmt.Errorf("auth response missing access token")
 	}
-	if strings.TrimSpace(cred.RefreshToken) == "" {
+	if cred.RefreshToken == "" {
 		return auth.Credentials{}, fmt.Errorf("auth response missing refresh token")
 	}
 

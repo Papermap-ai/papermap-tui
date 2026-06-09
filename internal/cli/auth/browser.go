@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -31,6 +32,8 @@ import (
 // browserLoginTimeout bounds the entire flow. If the user abandons the
 // browser tab the callback server gets torn down and the CLI errors.
 const browserLoginTimeout = 2 * time.Minute
+
+const allowUntrustedFrontendEnvKey = "PAPERMAP_ALLOW_UNTRUSTED_FRONTEND"
 
 // callbackPath is the only path the local server listens on. The
 // frontend must redirect to "<callback_url>/callback" after minting the
@@ -170,15 +173,40 @@ func buildLoginURL(frontendURL, callbackURL, state string) (string, error) {
 	if base == "" {
 		return "", errors.New("frontend url is empty")
 	}
-	u, err := url.Parse(base + "/auth/login")
+	baseURL, err := url.Parse(base)
 	if err != nil {
 		return "", fmt.Errorf("parse frontend url: %w", err)
 	}
+	if baseURL.Scheme == "" || baseURL.Host == "" {
+		return "", errors.New("frontend url must include scheme and host")
+	}
+
+	if !allowUntrustedFrontend() {
+		if !strings.EqualFold(baseURL.Scheme, "https") {
+			return "", fmt.Errorf("frontend url must use https unless %s=1", allowUntrustedFrontendEnvKey)
+		}
+		host := strings.ToLower(baseURL.Hostname())
+		if host != "papermap.ai" && host != "www.papermap.ai" {
+			return "", fmt.Errorf("frontend url host %q is not allowed; use https://papermap.ai or set %s=1", host, allowUntrustedFrontendEnvKey)
+		}
+	}
+
+	loginPath := strings.TrimRight(baseURL.Path, "/") + "/auth/login"
+	u, err := url.Parse(baseURL.String())
+	if err != nil {
+		return "", fmt.Errorf("parse frontend url: %w", err)
+	}
+	u.Path = loginPath
 	q := u.Query()
 	q.Set("cli_callback", callbackURL)
 	q.Set("state", state)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+func allowUntrustedFrontend() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(allowUntrustedFrontendEnvKey)))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 // startCallbackServer binds a loopback listener on a kernel-assigned
