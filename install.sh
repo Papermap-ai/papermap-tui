@@ -8,32 +8,15 @@
 # Usage (public repo):
 #   curl -fsSL https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
 #
-# Usage (private repo, requires a GitHub token with repo:read access):
-#   export GH_TOKEN=ghp_xxx && curl -fsSL \
-#       -H "Authorization: Bearer $GH_TOKEN" \
-#       https://raw.githubusercontent.com/Papermap-ai/papermap-tui/main/install.sh | sh
-#
 # Environment overrides:
 #   PREFIX        Installation root (default /usr/local or ~/.local)
 #   VERSION       Release tag to install (default: latest)
 #   REPO          GitHub repo (default Papermap-ai/papermap-tui)
-#   GH_TOKEN      GitHub token for private-repo access (alias: GITHUB_TOKEN)
-#   GITHUB_TOKEN  Same as GH_TOKEN (whichever is set is used)
-#
-# TODO(public-repo): when this repo becomes public, delete the
-# GH_TOKEN / GITHUB_TOKEN handling below (search for "TOKEN" in this file)
-# and revert to plain anonymous downloads. The token plumbing is only
-# needed while the repo is private and is a footgun otherwise (tokens
-# get pasted into shared docs, leak via process lists with `set -x`,
-# etc.). Remove the related private-repo section from README.md too.
 
 set -eu
 
 REPO="${REPO:-Papermap-ai/papermap-tui}"
 VERSION="${VERSION:-latest}"
-
-# Resolve auth token (GH_TOKEN preferred, GITHUB_TOKEN as fallback).
-TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 
 err() {
     printf 'error: %s\n' "$1" >&2
@@ -53,8 +36,7 @@ require mkdir
 require chmod
 require tar
 
-# Pick downloader. We wrap curl/wget in helpers so the auth header is
-# attached uniformly and never echoed.
+# Pick downloader.
 DL_TOOL=""
 if command -v curl >/dev/null 2>&1; then
     DL_TOOL="curl"
@@ -64,7 +46,7 @@ else
     err "need curl or wget"
 fi
 
-# Fetch a URL to stdout. Adds the auth header when TOKEN is set.
+# Fetch a URL to stdout.
 # Args: URL [accept-header]
 dl_to_stdout() {
     _url="$1"
@@ -72,17 +54,15 @@ dl_to_stdout() {
     if [ "$DL_TOOL" = "curl" ]; then
         set -- -fsSL
         [ -n "$_accept" ] && set -- "$@" -H "Accept: $_accept"
-        [ -n "$TOKEN" ] && set -- "$@" -H "Authorization: Bearer $TOKEN"
         curl "$@" "$_url"
     else
         set -- -qO-
         [ -n "$_accept" ] && set -- "$@" --header="Accept: $_accept"
-        [ -n "$TOKEN" ] && set -- "$@" --header="Authorization: Bearer $TOKEN"
         wget "$@" "$_url"
     fi
 }
 
-# Fetch a URL to a file path. Adds the auth header when TOKEN is set.
+# Fetch a URL to a file path.
 # Args: URL DEST [accept-header]
 dl_to_file() {
     _url="$1"
@@ -91,12 +71,10 @@ dl_to_file() {
     if [ "$DL_TOOL" = "curl" ]; then
         set -- -fsSL -o "$_dest"
         [ -n "$_accept" ] && set -- "$@" -H "Accept: $_accept"
-        [ -n "$TOKEN" ] && set -- "$@" -H "Authorization: Bearer $TOKEN"
         curl "$@" "$_url"
     else
         set -- -qO "$_dest"
         [ -n "$_accept" ] && set -- "$@" --header="Accept: $_accept"
-        [ -n "$TOKEN" ] && set -- "$@" --header="Authorization: Bearer $TOKEN"
         wget "$@" "$_url"
     fi
 }
@@ -125,7 +103,7 @@ if [ "$VERSION" = "latest" ]; then
     TAG="$(dl_to_stdout "$API_BASE/releases/latest" "application/vnd.github+json" \
         | grep '"tag_name":' | head -n1 \
         | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
-    [ -n "$TAG" ] || err "failed to resolve latest release tag (is the repo private and \$GH_TOKEN unset?)"
+    [ -n "$TAG" ] || err "failed to resolve latest release tag"
 else
     TAG="$VERSION"
 fi
@@ -138,59 +116,17 @@ info "Installing papermap $TAG ($OS/$ARCH)"
 TMP="$(mktemp -d 2>/dev/null || mktemp -d -t papermap)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-# Choose download URLs based on whether we have a token.
-# Anonymous: use the public releases/download path (works for public repos).
-# Authenticated: use the API assets endpoint, which requires looking up
-# each asset id first since it can't be guessed from the file name.
-if [ -z "$TOKEN" ]; then
-    BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 
-    info "Downloading $ARCHIVE"
-    dl_to_file "$BASE_URL/$ARCHIVE" "$TMP/$ARCHIVE" \
-        || err "failed to download $ARCHIVE.
+info "Downloading $ARCHIVE"
+dl_to_file "$BASE_URL/$ARCHIVE" "$TMP/$ARCHIVE" \
+    || err "failed to download $ARCHIVE.
   The release may be missing archives, or your platform ($OS/$ARCH)
   may not have been built. Check https://github.com/$REPO/releases/tag/$TAG."
 
-    info "Downloading checksums.txt"
-    dl_to_file "$BASE_URL/checksums.txt" "$TMP/checksums.txt" \
-        || err "failed to download checksums (release may be missing artifacts)"
-else
-    info "Resolving release assets..."
-    release_json="$TMP/release.json"
-    dl_to_file "$API_BASE/releases/tags/$TAG" "$release_json" "application/vnd.github+json" \
-        || err "failed to fetch release metadata for $TAG"
-
-    # Extract asset id by name. Avoids needing jq.
-    asset_id_for() {
-        _name="$1"
-        # Walk the JSON: look for "name": "<name>" then back up to find the
-        # nearest preceding "id": <number>. Newline-normalize first.
-        tr ',' '\n' < "$release_json" \
-            | awk -v want="\"$_name\"" '
-                /"id":/ { match($0, /[0-9]+/); id = substr($0, RSTART, RLENGTH) }
-                $0 ~ "\"name\": *" want { print id; exit }
-            '
-    }
-
-    archive_id="$(asset_id_for "$ARCHIVE")"
-    if [ -z "$archive_id" ]; then
-        err "asset $ARCHIVE not found in release $TAG.
-  This usually means the release exists but its archives were never
-  uploaded (e.g. the GoReleaser workflow did not run for this tag).
-  Check https://github.com/$REPO/releases/tag/$TAG to confirm assets
-  are present, or rerun the release workflow for this tag."
-    fi
-    sums_id="$(asset_id_for "checksums.txt")"
-    [ -n "$sums_id" ] || err "checksums.txt not found in release $TAG (release may be missing artifacts)"
-
-    info "Downloading $ARCHIVE"
-    dl_to_file "$API_BASE/releases/assets/$archive_id" "$TMP/$ARCHIVE" "application/octet-stream" \
-        || err "failed to download $ARCHIVE"
-
-    info "Downloading checksums.txt"
-    dl_to_file "$API_BASE/releases/assets/$sums_id" "$TMP/checksums.txt" "application/octet-stream" \
-        || err "failed to download checksums"
-fi
+info "Downloading checksums.txt"
+dl_to_file "$BASE_URL/checksums.txt" "$TMP/checksums.txt" \
+    || err "failed to download checksums (release may be missing artifacts)"
 
 info "Verifying SHA256..."
 expected="$(grep " $ARCHIVE\$" "$TMP/checksums.txt" | awk '{print $1}')"

@@ -50,6 +50,8 @@ Auth login flags:
 Environment:
   PAPERMAP_API_URL            Override the API base URL (same as --api-url)
   PAPERMAP_FRONTEND_URL       Override the frontend base URL (same as --frontend-url)
+  PAPERMAP_ALLOW_UNTRUSTED_FRONTEND
+                               Allow non-production frontend hosts for browser login
   PAPERMAP_FORCE_FILE_STORE   Force file-based credential storage
 
 Run 'papermap auth login' before launching the TUI.

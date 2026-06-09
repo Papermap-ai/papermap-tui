@@ -38,7 +38,11 @@ func TestClientCheckRedirectStripsAuthOnCrossHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close response body: %v", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status: %d", resp.StatusCode)
@@ -78,7 +82,11 @@ func TestClientCheckRedirectPreservesAuthOnSameHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close response body: %v", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status: %d", resp.StatusCode)
@@ -112,7 +120,11 @@ func TestClientNoRedirectPreservesAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			t.Errorf("close response body: %v", cerr)
+		}
+	}()
 
 	if receivedAuth != "Bearer secret-token" {
 		t.Fatalf("expected Authorization on direct request, got %q", receivedAuth)
