@@ -136,14 +136,14 @@ Configuration is loaded from `~/.papermap/config.yaml`. Environment variables ta
 
 | Setting       | Config key      | Env var                        | Default                      |
 | ------------- | --------------- | ------------------------------ | ---------------------------- |
-| API URL       | `api_url`       | `PAPERMAP_API_URL`             | `https://dataapi.papermap.ai` |
+| API URL       | `api_url`       | `PAPERMAP_API_URL`             | `https://prod.dataapi.papermap.ai` |
 | Frontend URL  | `frontend_url`  | `PAPERMAP_FRONTEND_URL`        | `https://papermap.ai`        |
 | Windows shell | `shell.windows` | —                              | `pwsh`                       |
 
 Example `~/.papermap/config.yaml`:
 
 ```yaml
-api_url: https://dataapi.papermap.ai
+api_url: https://prod.dataapi.papermap.ai
 frontend_url: https://papermap.ai
 ```
 
