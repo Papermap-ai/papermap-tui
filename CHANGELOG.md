@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.2...v0.6.3) (2026-06-09)
+
+
+### Bug Fixes
+
+* **config:** set default API URL to prod host ([94245d7](https://github.com/Papermap-ai/papermap-tui/commit/94245d7a645e07b9818246de7723b40c4ee20adf))
+* **config:** set default API URL to prod host ([298c7b6](https://github.com/Papermap-ai/papermap-tui/commit/298c7b6be29e924df7f566651ed0dba2d5b80648))
+
 ## [0.6.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.0...v0.6.1) (2026-06-09)
 
 
