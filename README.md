@@ -13,6 +13,19 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install papermap-ai/papermap/papermap
+```
+
+Or tap once, then install by short name:
+
+```bash
+brew tap papermap-ai/papermap
+brew install papermap
+```
+
 ### Install script (Linux / macOS)
 
 ```bash
