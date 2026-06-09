@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.3...v0.7.0) (2026-06-09)
+
+
+### Features
+
+* **release:** publish Homebrew formula to tap ([aa37565](https://github.com/Papermap-ai/papermap-tui/commit/aa375653e39e970d00baf196beb6dcdc8a6c90d1))
+* **release:** publish Homebrew formula to tap ([cba16db](https://github.com/Papermap-ai/papermap-tui/commit/cba16dbcadb53d0290f878fd302b4d4ecbaa4319))
+
+
+### Documentation
+
+* add MIT license ([3a43b43](https://github.com/Papermap-ai/papermap-tui/commit/3a43b43349c9585845fed1609f5aedf96af225c2))
+* add MIT license ([42307b3](https://github.com/Papermap-ai/papermap-tui/commit/42307b3793063ab28107a434348029cec101db32))
+
 ## [0.6.3](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.2...v0.6.3) (2026-06-09)
 
 
