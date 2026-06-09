@@ -63,3 +63,24 @@ release:
   draft: false
   prerelease: auto
   name_template: "v{{ .Version }}"
+
+brews:
+  - name: papermap
+    ids:
+      - papermap
+    repository:
+      owner: Papermap-ai
+      name: homebrew-papermap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/Papermap-ai/papermap-tui"
+    description: "Terminal-native client for Papermap insights"
+    license: "MIT"
+    commit_author:
+      name: papermap-bot
+      email: bot@papermap.ai
+    install: |
+      bin.install "papermap"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/papermap --version")
