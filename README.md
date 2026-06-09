@@ -235,4 +235,4 @@ The `release` workflow builds darwin/linux × amd64/arm64 archives, uploads them
 
 ## License
 
-See [LICENSE](LICENSE) if present in the repository root.
+See [LICENSE.md](LICENSE.md).
