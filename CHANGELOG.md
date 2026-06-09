@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.0...v0.6.1) (2026-06-09)
+
+
+### Security
+
+* **api:** fail closed on partial refresh responses ([d23bf28](https://github.com/Papermap-ai/papermap-tui/commit/d23bf28f87bfa6f3151c49a591f542d98ea1332c))
+* **api:** strip Authorization on cross-host redirects ([0b94ac9](https://github.com/Papermap-ai/papermap-tui/commit/0b94ac97ad030dacd78fda71df6eeacc912743d6))
+
 ## [0.6.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.5.0...v0.6.0) (2026-05-08)
 
 
