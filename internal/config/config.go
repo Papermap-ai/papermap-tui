@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultAPIURL      = "https://dataapi.papermap.ai"
+	defaultAPIURL      = "https://prod.dataapi.papermap.ai"
 	defaultFrontendURL = "https://papermap.ai"
 	apiURLEnvKey       = "PAPERMAP_API_URL"
 	frontendURLEnvKey  = "PAPERMAP_FRONTEND_URL"
