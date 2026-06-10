@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.0...v0.7.1) (2026-06-10)
+
+
+### Documentation
+
+* mention Homebrew tui alias ([2091574](https://github.com/Papermap-ai/papermap-tui/commit/2091574c6c3b4b8c13e1c93828e973469e62a47b))
+* mention Homebrew tui alias ([b9be5b4](https://github.com/Papermap-ai/papermap-tui/commit/b9be5b40a2b5b66c13537287a22ad01070c5761a))
+
 ## [0.7.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.6.3...v0.7.0) (2026-06-09)
 
 
