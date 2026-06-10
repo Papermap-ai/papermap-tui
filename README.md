@@ -17,6 +17,8 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lipgloss](
 
 ```bash
 brew install papermap-ai/papermap/papermap
+# alias
+brew install papermap-ai/papermap/tui
 ```
 
 Or tap once, then install by short name:
