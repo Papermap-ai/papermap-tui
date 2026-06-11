@@ -167,9 +167,12 @@ type confirmationSubmittedMsg struct {
 }
 
 type Model struct {
-	width            int
-	height           int
-	screen           screen
+	width  int
+	height int
+	screen screen
+	// returnScreen is a one-shot destination for nested overlays launched
+	// from another overlay, e.g. palette -> workspace picker -> Esc.
+	returnScreen     screen
 	config           config.Config
 	configLoaded     bool
 	authenticated    bool
@@ -344,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.dispatchPaletteCommand(msg.Command)
 		return m, cmd
 	case palette.CancelMsg:
+		m.returnScreen = ""
 		m.screen = screenChat
 		return m, nil
 	case conversations.OpenChatMsg:
@@ -475,15 +479,6 @@ func (m Model) handleWorkspacesLoaded(msg workspacesLoadedMsg) Model {
 	// in place so the loading state clears.
 	if m.screen == screenWorkspacePicker {
 		m.workspace.SetWorkspaces(m.workspaces, m.workspaceID)
-	}
-	return m
-}
-
-func (m Model) handleWorkspaceCancel() Model {
-	if m.authenticated {
-		m.screen = screenChat
-	} else {
-		m.screen = screenLanding
 	}
 	return m
 }
