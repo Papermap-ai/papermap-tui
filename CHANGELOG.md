@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.2...v0.8.0) (2026-06-11)
+
+
+### Features
+
+* **config:** persist thinking toggle ([9df9e62](https://github.com/Papermap-ai/papermap-tui/commit/9df9e62f947acbcc8b62e85ed247809d4111cd71))
+* **workspace:** add picker search ([1c783bf](https://github.com/Papermap-ai/papermap-tui/commit/1c783bf9b78c6c962531bce46732f134e6dbbbc1))
+
+
+### Bug Fixes
+
+* **app:** return to palette from pickers ([cd01767](https://github.com/Papermap-ai/papermap-tui/commit/cd017673b0416a1c455a9f4ab89414010b5890f7))
+
 ## [0.7.2](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.1...v0.7.2) (2026-06-11)
 
 
