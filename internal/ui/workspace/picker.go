@@ -59,6 +59,7 @@ type Model struct {
 	currentID   string
 	cursor      int
 	page        int
+	query       string
 	loading     bool
 	loadMessage string
 }
@@ -78,14 +79,9 @@ func (m *Model) SetWorkspaces(entries []config.WorkspaceEntry, currentID string)
 	m.loading = false
 	m.cursor = 0
 	m.page = 0
+	m.query = ""
 
-	for i, entry := range entries {
-		if entry.WorkspaceID == m.currentID {
-			m.cursor = i
-			m.page = i / pageSize
-			break
-		}
-	}
+	m.resetCursorForFilter()
 }
 
 // SetLoading toggles the loading-state copy. Called when the workspace list
@@ -98,14 +94,59 @@ func (m *Model) SetLoading(loading bool, message string) {
 }
 
 func (m Model) totalPages() int {
-	if len(m.entries) == 0 {
+	if len(m.filteredEntries()) == 0 {
 		return 1
 	}
-	pages := len(m.entries) / pageSize
-	if len(m.entries)%pageSize != 0 {
+	pages := len(m.filteredEntries()) / pageSize
+	if len(m.filteredEntries())%pageSize != 0 {
 		pages++
 	}
 	return pages
+}
+
+func (m Model) filteredEntries() []config.WorkspaceEntry {
+	query := strings.ToLower(strings.TrimSpace(m.query))
+	if query == "" {
+		return m.entries
+	}
+
+	filtered := make([]config.WorkspaceEntry, 0, len(m.entries))
+	for _, entry := range m.entries {
+		if strings.Contains(strings.ToLower(displayName(entry)), query) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func displayName(entry config.WorkspaceEntry) string {
+	name := strings.TrimSpace(entry.Name)
+	if name != "" {
+		return name
+	}
+	return entry.WorkspaceID
+}
+
+func (m *Model) resetCursorForFilter() {
+	entries := m.filteredEntries()
+	m.cursor = 0
+	m.page = 0
+	if len(entries) == 0 {
+		return
+	}
+
+	for i, entry := range entries {
+		if entry.WorkspaceID == m.currentID {
+			m.cursor = i
+			m.page = i / pageSize
+			return
+		}
+	}
+}
+
+func (m *Model) setQuery(query string) {
+	m.query = query
+	m.resetCursorForFilter()
 }
 
 // Update handles key input. Emits SelectMsg or CancelMsg via returned cmd.
@@ -120,32 +161,35 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, func() tea.Msg { return CancelMsg{} }
 
 	case "enter":
-		if m.loading || len(m.entries) == 0 {
+		entries := m.filteredEntries()
+		if m.loading || len(entries) == 0 {
 			return m, nil
 		}
-		if m.cursor < 0 || m.cursor >= len(m.entries) {
+		if m.cursor < 0 || m.cursor >= len(entries) {
 			return m, nil
 		}
-		selected := m.entries[m.cursor]
+		selected := entries[m.cursor]
 		return m, func() tea.Msg { return SelectMsg{Workspace: selected} }
 
-	case "down", "j", "ctrl+n":
-		if len(m.entries) == 0 {
+	case "down", "ctrl+n":
+		entries := m.filteredEntries()
+		if len(entries) == 0 {
 			return m, nil
 		}
-		m.cursor = (m.cursor + 1) % len(m.entries)
+		m.cursor = (m.cursor + 1) % len(entries)
 		m.page = m.cursor / pageSize
 		return m, nil
 
-	case "up", "k", "ctrl+p":
-		if len(m.entries) == 0 {
+	case "up", "ctrl+p":
+		entries := m.filteredEntries()
+		if len(entries) == 0 {
 			return m, nil
 		}
-		m.cursor = (m.cursor - 1 + len(m.entries)) % len(m.entries)
+		m.cursor = (m.cursor - 1 + len(entries)) % len(entries)
 		m.page = m.cursor / pageSize
 		return m, nil
 
-	case "right", "l", "pgdown", "n":
+	case "right", "pgdown":
 		if m.totalPages() <= 1 {
 			return m, nil
 		}
@@ -153,7 +197,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.cursor = m.page * pageSize
 		return m, nil
 
-	case "left", "h", "pgup", "p":
+	case "left", "pgup":
 		if m.totalPages() <= 1 {
 			return m, nil
 		}
@@ -161,20 +205,41 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.cursor = m.page * pageSize
 		return m, nil
 
-	case "home", "g":
-		if len(m.entries) == 0 {
+	case "home":
+		if len(m.filteredEntries()) == 0 {
 			return m, nil
 		}
 		m.cursor = 0
 		m.page = 0
 		return m, nil
 
-	case "end", "G":
-		if len(m.entries) == 0 {
+	case "end":
+		entries := m.filteredEntries()
+		if len(entries) == 0 {
 			return m, nil
 		}
-		m.cursor = len(m.entries) - 1
+		m.cursor = len(entries) - 1
 		m.page = m.totalPages() - 1
+		return m, nil
+
+	case "backspace":
+		if m.query == "" {
+			return m, nil
+		}
+		runes := []rune(m.query)
+		m.setQuery(string(runes[:len(runes)-1]))
+		return m, nil
+
+	case "ctrl+u":
+		if m.query == "" {
+			return m, nil
+		}
+		m.setQuery("")
+		return m, nil
+	}
+
+	if keyMsg.Text != "" && keyMsg.Mod == 0 {
+		m.setQuery(m.query + keyMsg.Text)
 		return m, nil
 	}
 
@@ -189,18 +254,21 @@ func (m Model) View(th theme.Theme, screenWidth int) string {
 	header := th.Title.Render("Switch workspace")
 
 	var body string
+	filtered := m.filteredEntries()
 	switch {
 	case m.loading:
 		body = th.Muted.Render(m.loadMessage)
 	case len(m.entries) == 0:
 		body = th.Muted.Render("No workspaces available yet.")
+	case len(filtered) == 0:
+		body = th.Muted.Render(fmt.Sprintf("No workspaces match %q.", m.query))
 	default:
 		body = m.renderEntries(th)
 	}
 
 	footer := m.renderFooter(th)
 
-	contentParts := []string{header, ""}
+	contentParts := []string{header, "", m.renderSearch(th), ""}
 	contentParts = append(contentParts, body)
 	if footer != "" {
 		contentParts = append(contentParts, "", footer)
@@ -218,10 +286,11 @@ func (m Model) View(th theme.Theme, screenWidth int) string {
 }
 
 func (m Model) renderEntries(th theme.Theme) string {
+	entries := m.filteredEntries()
 	start := m.page * pageSize
 	end := start + pageSize
-	if end > len(m.entries) {
-		end = len(m.entries)
+	if end > len(entries) {
+		end = len(entries)
 	}
 
 	cursorStyle := lipgloss.NewStyle().Foreground(th.LogoColorA).Bold(true)
@@ -229,11 +298,8 @@ func (m Model) renderEntries(th theme.Theme) string {
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		entry := m.entries[i]
-		name := entry.Name
-		if strings.TrimSpace(name) == "" {
-			name = entry.WorkspaceID
-		}
+		entry := entries[i]
+		name := displayName(entry)
 
 		isCursor := i == m.cursor
 		isCurrent := entry.WorkspaceID == m.currentID
@@ -269,14 +335,24 @@ func (m Model) renderEntries(th theme.Theme) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) renderSearch(th theme.Theme) string {
+	label := th.Muted.Render("Search: ")
+	if m.query == "" {
+		return label + th.Muted.Render("type workspace name...")
+	}
+	return label + th.Accent.Render(m.query)
+}
+
 func (m Model) renderFooter(th theme.Theme) string {
-	hints := "↑↓ navigate  •  Enter select  •  Esc cancel"
+	hints := "type to search  •  ↑↓ navigate  •  Enter select  •  Ctrl+U clear  •  Esc cancel"
 	if m.totalPages() > 1 {
-		hints = fmt.Sprintf("↑↓ navigate  •  ←→ page %d/%d  •  Enter select  •  Esc cancel",
+		hints = fmt.Sprintf("type to search  •  ↑↓ navigate  •  ←→ page %d/%d  •  Enter select  •  Ctrl+U clear  •  Esc cancel",
 			m.page+1, m.totalPages())
 	}
 	if m.loading || len(m.entries) == 0 {
 		hints = "Esc cancel"
+	} else if len(m.filteredEntries()) == 0 {
+		hints = "type to search  •  Ctrl+U clear  •  Esc cancel"
 	}
 	return th.KeyHint.Render(hints)
 }

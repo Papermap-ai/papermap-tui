@@ -42,12 +42,154 @@ func TestPickerNavigationCyclesEntries(t *testing.T) {
 	}
 
 	// Down should move to Gamma.
-	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	m = updated
 	view = m.View(theme.Default(), 80)
 	// Cursor indicator on Gamma now (uses ›).
 	if !strings.Contains(view, "Gamma") {
 		t.Fatalf("expected Gamma in view, got %q", view)
+	}
+}
+
+func TestPickerSearchFiltersByName(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	entries := []config.WorkspaceEntry{
+		{WorkspaceID: "ws-a", Name: "Alpha"},
+		{WorkspaceID: "ws-b", Name: "Beta"},
+		{WorkspaceID: "ws-c", Name: "Gamma"},
+	}
+	m.SetWorkspaces(entries, "")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Text: "g"}))
+	m = updated
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	m = updated
+
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, "Search:") || !strings.Contains(view, "ga") {
+		t.Fatalf("expected search query in view, got %q", view)
+	}
+	if !strings.Contains(view, "Gamma") {
+		t.Fatalf("expected Gamma in filtered view, got %q", view)
+	}
+	if strings.Contains(view, "Alpha") || strings.Contains(view, "Beta") {
+		t.Fatalf("expected non-matching workspaces hidden, got %q", view)
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil {
+		t.Fatal("expected select cmd")
+	}
+	msg, ok := cmd().(workspace.SelectMsg)
+	if !ok {
+		t.Fatalf("expected SelectMsg, got %T", msg)
+	}
+	if msg.Workspace.WorkspaceID != "ws-c" {
+		t.Fatalf("expected filtered Gamma selection, got %+v", msg.Workspace)
+	}
+}
+
+func TestPickerSearchIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	m.SetWorkspaces([]config.WorkspaceEntry{
+		{WorkspaceID: "ws-a", Name: "Alpha"},
+		{WorkspaceID: "ws-b", Name: "Beta"},
+	}, "")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'A', Text: "A"}))
+	m = updated
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'L', Text: "L"}))
+	m = updated
+
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, "Alpha") || strings.Contains(view, "Beta") {
+		t.Fatalf("expected case-insensitive Alpha match only, got %q", view)
+	}
+}
+
+func TestPickerSearchFallsBackToWorkspaceID(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	m.SetWorkspaces([]config.WorkspaceEntry{
+		{WorkspaceID: "finance-prod"},
+		{WorkspaceID: "ws-b", Name: "Marketing"},
+	}, "")
+
+	for _, key := range []string{"f", "i", "n"} {
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: []rune(key)[0], Text: key}))
+		m = updated
+	}
+
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, "finance-prod") || strings.Contains(view, "Marketing") {
+		t.Fatalf("expected workspace ID fallback match only, got %q", view)
+	}
+}
+
+func TestPickerSearchBackspaceAndClear(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	m.SetWorkspaces([]config.WorkspaceEntry{
+		{WorkspaceID: "ws-a", Name: "Alpha"},
+		{WorkspaceID: "ws-b", Name: "Beta"},
+	}, "")
+
+	for _, key := range []string{"b", "e"} {
+		updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: []rune(key)[0], Text: key}))
+		m = updated
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	m = updated
+
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, "Beta") || strings.Contains(view, "Alpha") {
+		t.Fatalf("expected backspace to leave query b and match Beta only, got %q", view)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	m = updated
+	view = m.View(theme.Default(), 80)
+	if !strings.Contains(view, "Alpha") || !strings.Contains(view, "Beta") {
+		t.Fatalf("expected ctrl+u to clear search, got %q", view)
+	}
+}
+
+func TestPickerJTypesIntoSearch(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	m.SetWorkspaces([]config.WorkspaceEntry{
+		{WorkspaceID: "ws-a", Name: "Alpha"},
+		{WorkspaceID: "ws-b", Name: "Beta"},
+	}, "")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'j', Text: "j"}))
+	m = updated
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, `No workspaces match "j".`) {
+		t.Fatalf("expected j to type into search, got %q", view)
+	}
+}
+
+func TestPickerNoSearchResults(t *testing.T) {
+	t.Parallel()
+
+	m := workspace.NewModel()
+	m.SetWorkspaces([]config.WorkspaceEntry{
+		{WorkspaceID: "ws-a", Name: "Alpha"},
+	}, "")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'z', Text: "z"}))
+	m = updated
+	view := m.View(theme.Default(), 80)
+	if !strings.Contains(view, `No workspaces match "z".`) {
+		t.Fatalf("expected no-results copy, got %q", view)
 	}
 }
 
