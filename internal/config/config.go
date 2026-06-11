@@ -25,6 +25,9 @@ type Config struct {
 	// "opus-4.6") the user picked via the model picker or TAB cycle.
 	// Empty means defer to the backend default.
 	SelectedModel string `yaml:"selected_model,omitempty"`
+	// ShowThinking controls whether assistant reasoning traces render by
+	// default. Missing or false means traces stay hidden until toggled on.
+	ShowThinking bool `yaml:"show_thinking,omitempty"`
 	// Shell controls the per-OS shell binary used by chat "!" mode.
 	// Fields are scoped to the OS they apply to so unrelated
 	// platforms ignore them rather than fight over a single key.

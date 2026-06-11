@@ -397,6 +397,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
 	m.config = msg.config
+	m.chat.SetShowThinking(m.config.ShowThinking)
 	m.authenticated = msg.authenticated
 	m.client = msg.client
 	m.startupErr = msg.err
@@ -832,6 +833,9 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if !m.chat.IsStreaming() && !m.chat.IsShellMode() {
 				return m.cycleModel(), nil
 			}
+		case keyToggleThinking:
+			m.toggleThinking()
+			return m, nil
 		case keyEscape:
 			// Esc precedence (most specific first):
 			//   1. cancel an in-flight shell command,
@@ -1693,6 +1697,17 @@ func (m Model) modelDisplayName(slug string) string {
 func (m *Model) persistSelectedModel() {
 	cfg := m.config
 	cfg.SelectedModel = m.selectedModel
+	if err := config.Save(cfg); err == nil {
+		m.config = cfg
+	}
+}
+
+// toggleThinking flips the reasoning-trace visibility preference and writes
+// it back to config.yaml so the choice survives future TUI launches.
+func (m *Model) toggleThinking() {
+	m.chat.ToggleThinking()
+	cfg := m.config
+	cfg.ShowThinking = m.chat.ShowThinking()
 	if err := config.Save(cfg); err == nil {
 		m.config = cfg
 	}

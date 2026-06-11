@@ -313,7 +313,7 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 		return nil
 	case commandToggleThinking:
 		m.screen = screenChat
-		m.chat.ToggleThinking()
+		m.toggleThinking()
 		return nil
 	case commandShellMode:
 		m.screen = screenChat

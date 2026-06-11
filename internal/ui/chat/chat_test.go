@@ -75,6 +75,7 @@ func TestChatTraceRendersAtNarrowWidth(t *testing.T) {
 
 	th := theme.Default()
 	model := chat.NewModel(th)
+	model.SetShowThinking(true)
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
 	model = updated
 	model = typeKeys(model, "h", "i")
@@ -125,13 +126,14 @@ func TestChatClearTranscriptViaModel(t *testing.T) {
 
 // TestChatTraceLifecycle drives a full assistant request: submit, stream
 // thoughts and a tool call, then complete. Asserts the live ticker shows
-// during streaming, the trace stays expanded by default after the answer
-// arrives, and ctrl+t hides the completed trace entirely.
+// during streaming, the trace stays expanded when enabled, and ctrl+t hides
+// the completed trace entirely.
 func TestChatTraceLifecycle(t *testing.T) {
 	t.Parallel()
 
 	th := theme.Default()
 	model := sizeModel(t, chat.NewModel(th))
+	model.SetShowThinking(true)
 	model = typeKeys(model, "h", "i")
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated
@@ -156,8 +158,7 @@ func TestChatTraceLifecycle(t *testing.T) {
 		t.Fatalf("expected tool call title visible during stream, got %q", view)
 	}
 
-	// Finish the stream. Trace stays expanded by default because
-	// showThinking starts true.
+	// Finish the stream. Trace stays expanded because showThinking is on.
 	model.AppendStreamText("Done.")
 	model.CompleteStream()
 
@@ -196,8 +197,9 @@ func TestChatThinkingTogglePersistsAcrossMessages(t *testing.T) {
 
 	th := theme.Default()
 	model := sizeModel(t, chat.NewModel(th))
+	model.SetShowThinking(true)
 
-	// First request: full trace + answer with thinking on (default).
+	// First request: full trace + answer with thinking on.
 	model = typeKeys(model, "a")
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = updated

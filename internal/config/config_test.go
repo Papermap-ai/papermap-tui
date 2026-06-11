@@ -30,6 +30,54 @@ func TestSaveLoadRoundtripPersistsSelectedModel(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsShowThinkingOff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.ShowThinking {
+		t.Fatal("ShowThinking defaulted to true, want false")
+	}
+}
+
+func TestSaveLoadRoundtripPersistsShowThinking(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := Config{ShowThinking: true}
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !got.ShowThinking {
+		t.Fatal("ShowThinking: got false want true")
+	}
+}
+
+func TestSaveOmitsShowThinkingWhenFalse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Save(Config{ShowThinking: false}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".papermap", "config.yaml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if contains(string(data), "show_thinking") {
+		t.Fatalf("expected show_thinking to be omitted, got:\n%s", data)
+	}
+}
+
 func TestSaveOmitsSelectedModelWhenEmpty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
