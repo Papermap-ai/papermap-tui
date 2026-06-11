@@ -869,7 +869,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleEnter(), nil
 	case keySwitchWorkspace:
 		if m.authenticated && m.screen == screenChat {
-			m.openWorkspacePicker()
+			return m, m.openWorkspacePicker()
 		}
 		return m, nil
 	case keyClearChat:

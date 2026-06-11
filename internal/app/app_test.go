@@ -179,6 +179,118 @@ func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 	}
 }
 
+func TestOpeningWorkspacePickerRefreshesWorkspaces(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var (
+		mu           sync.Mutex
+		paginateHits int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/analytics/workspaces/unified":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"workspace": map[string]any{
+					"workspace_id":   "unified-123",
+					"name":           "Unified Workspace",
+					"workspace_type": "unified",
+					"is_unified":     true,
+				},
+			})
+		case "/api/v1/analytics/workspaces/unified-123/included-workspaces":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success":    true,
+				"workspaces": []map[string]any{},
+				"settings": map[string]any{
+					"workspace_id":            "unified-123",
+					"workspace_name":          "Unified Workspace",
+					"included_workspace_ids":  []string{},
+					"all_workspaces_included": false,
+				},
+			})
+		case "/api/v1/options/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"all_models": map[string]any{
+					"openai": []string{"gpt-5.4-mini"},
+				},
+				"recommended_models": map[string]any{
+					"Default": "gpt-5.4-mini",
+				},
+			})
+		case "/api/v1/analytics/workspaces/paginate":
+			mu.Lock()
+			paginateHits++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"workspaces": []map[string]any{{
+					"workspace_id":   "ws-frontend",
+					"name":           "Frontend Workspace",
+					"workspace_type": "postgres",
+				}},
+				"total_pages": 1,
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	useAPIURLConfig(t, server.URL)
+	if err := config.SaveWorkspaces(config.WorkspaceCache{
+		Workspaces: []config.WorkspaceEntry{{
+			WorkspaceID:   "ws-cached",
+			Name:          "Cached Workspace",
+			WorkspaceType: "postgres",
+		}},
+		UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveWorkspaces returned error: %v", err)
+	}
+
+	store, err := auth.DefaultStore()
+	if err != nil {
+		t.Fatalf("DefaultStore returned error: %v", err)
+	}
+	if err := store.Save(auth.Credentials{
+		AccessToken:  jwtForTest(time.Now().Add(time.Hour)),
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	model, err := app.NewModel()
+	if err != nil {
+		t.Fatalf("NewModel returned error: %v", err)
+	}
+	updated, startupCmd := model.Update(startupForTest(t, model))
+	if startupCmd != nil {
+		t.Fatal("expected fresh workspace cache to skip startup refresh")
+	}
+
+	updated, refreshCmd := updated.(app.Model).Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+	if refreshCmd == nil {
+		t.Fatal("expected workspace picker open to return refresh cmd")
+	}
+	msg := refreshCmd()
+
+	mu.Lock()
+	hits := paginateHits
+	mu.Unlock()
+	if hits != 1 {
+		t.Fatalf("paginate hits after picker open: got %d want 1", hits)
+	}
+
+	updated, _ = updated.(app.Model).Update(msg)
+	view := updated.(app.Model).View().Content
+	if !strings.Contains(view, "Frontend Workspace") {
+		t.Fatalf("expected refreshed workspace in picker, got %q", view)
+	}
+}
+
 func TestStartupRefreshesExpiredCredentials(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

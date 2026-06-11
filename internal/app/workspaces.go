@@ -84,10 +84,10 @@ func (m Model) shouldRefreshWorkspaces() bool {
 	return time.Since(m.workspacesAt) > workspaceCacheMaxAge
 }
 
-// openWorkspacePicker primes the picker with the latest entries and switches
-// the screen. Falls back to a synthesized unified entry when no list has
-// been fetched yet.
-func (m *Model) openWorkspacePicker() {
+// openWorkspacePicker primes the picker with cached entries and switches the
+// screen. It always returns a refresh command so externally-created
+// workspaces show up when the picker opens.
+func (m *Model) openWorkspacePicker() tea.Cmd {
 	entries := m.workspaces
 	if len(entries) == 0 {
 		entries = workspaceEntriesFromUnified(m.workspaceID, m.workspaceName, m.defaultDashboard)
@@ -97,6 +97,10 @@ func (m *Model) openWorkspacePicker() {
 		m.workspace.SetLoading(true, "Loading workspaces...")
 	}
 	m.screen = screenWorkspacePicker
+	if m.client == nil {
+		return nil
+	}
+	return loadWorkspacesCmd(m.client)
 }
 
 // switchWorkspace tears down the current chat session and rebinds app state
