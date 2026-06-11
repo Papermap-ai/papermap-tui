@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.1...v0.7.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* **app:** refresh workspaces on picker open ([346517c](https://github.com/Papermap-ai/papermap-tui/commit/346517c913b3f401b6f05787e190e75d0e30a00f))
+* **config:** prefer config file URLs ([1a3f655](https://github.com/Papermap-ai/papermap-tui/commit/1a3f6555da01eec703d41c0b2b5513e49ed0405a))
+
 ## [0.7.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.0...v0.7.1) (2026-06-10)
 
 
