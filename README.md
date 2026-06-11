@@ -149,17 +149,19 @@ to opt into `cmd.exe` instead.
 
 Configuration is loaded from `~/.papermap/config.yaml`. Built-in defaults are used when a value is missing or empty. Explicit CLI flags such as `--api-url` and `--frontend-url` override config for that run only.
 
-| Setting       | Config key      | Default                      |
-| ------------- | --------------- | ---------------------------- |
+| Setting       | Config key      | Default                           |
+| ------------- | --------------- | --------------------------------- |
 | API URL       | `api_url`       | `https://prod.dataapi.papermap.ai` |
-| Frontend URL  | `frontend_url`  | `https://papermap.ai`        |
-| Windows shell | `shell.windows` | `pwsh`                       |
+| Frontend URL  | `frontend_url`  | `https://papermap.ai`             |
+| Show thinking | `show_thinking` | `false`                           |
+| Windows shell | `shell.windows` | `pwsh`                            |
 
 Example `~/.papermap/config.yaml`:
 
 ```yaml
 api_url: https://prod.dataapi.papermap.ai
 frontend_url: https://papermap.ai
+show_thinking: false
 ```
 
 For safety, browser login only allows `https://papermap.ai` (and

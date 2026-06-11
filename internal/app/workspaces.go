@@ -108,6 +108,7 @@ func (m *Model) openWorkspacePicker() tea.Cmd {
 // Re-selecting the active workspace is a no-op so the in-memory session
 // survives a round-trip through the picker.
 func (m Model) switchWorkspace(entry config.WorkspaceEntry) Model {
+	m.returnScreen = ""
 	if entry.WorkspaceID != "" && entry.WorkspaceID == m.workspaceID {
 		m.screen = screenChat
 		return m
@@ -121,6 +122,20 @@ func (m Model) switchWorkspace(entry config.WorkspaceEntry) Model {
 	}
 	m.defaultDashboard = entry.DefaultDashboard
 	m.screen = screenChat
+	return m
+}
+
+func (m Model) handleWorkspaceCancel() Model {
+	if m.returnScreen != "" {
+		m.screen = m.returnScreen
+		m.returnScreen = ""
+		return m
+	}
+	if m.authenticated {
+		m.screen = screenChat
+	} else {
+		m.screen = screenLanding
+	}
 	return m
 }
 

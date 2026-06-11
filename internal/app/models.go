@@ -29,6 +29,7 @@ func (m *Model) openModelPicker() {
 // the slug, and routes back to chat. Re-selecting the active model is a
 // no-op beyond closing the picker.
 func (m Model) switchModel(choice api.ModelChoice) Model {
+	m.returnScreen = ""
 	if choice.Slug == "" || choice.Slug == m.selectedModel {
 		m.screen = screenChat
 		return m
@@ -73,6 +74,11 @@ func (m Model) handleModelPickerSelect(msg modelpicker.SelectMsg) Model {
 
 // handleModelPickerCancel routes the picker's CancelMsg.
 func (m Model) handleModelPickerCancel() Model {
+	if m.returnScreen != "" {
+		m.screen = m.returnScreen
+		m.returnScreen = ""
+		return m
+	}
 	if m.authenticated {
 		m.screen = screenChat
 	} else {

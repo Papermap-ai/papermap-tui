@@ -210,7 +210,6 @@ func NewModel(th theme.Theme) Model {
 		spinner:        sp,
 		activeResponse: -1,
 		theme:          th,
-		showThinking:   true,
 		pastes:         newPasteRegistry(),
 	}
 }
@@ -551,6 +550,13 @@ func (m *Model) AppendStreamToolOutputContent(toolCallID string, content string)
 // without going through a key event.
 func (m *Model) ToggleThinking() {
 	m.showThinking = !m.showThinking
+	m.syncViewportContent()
+}
+
+// SetShowThinking applies the reasoning-trace visibility preference loaded
+// by the app from config.yaml.
+func (m *Model) SetShowThinking(show bool) {
+	m.showThinking = show
 	m.syncViewportContent()
 }
 

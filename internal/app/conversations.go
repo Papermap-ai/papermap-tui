@@ -53,6 +53,7 @@ type conversationsLoadedMsg struct {
 // openCommandPalette primes the palette with the chat command catalog and
 // switches to the palette overlay screen.
 func (m *Model) openCommandPalette() {
+	m.returnScreen = ""
 	m.palette.SetCommands(chatPaletteCommands())
 	m.screen = screenCommandPalette
 }
@@ -307,15 +308,19 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 	case commandConversations:
 		return m.openConversations()
 	case commandSwitchWorkspace:
+		m.returnScreen = screenCommandPalette
 		return m.openWorkspacePicker()
 	case commandSwitchModel:
+		m.returnScreen = screenCommandPalette
 		m.openModelPicker()
 		return nil
 	case commandToggleThinking:
+		m.returnScreen = ""
 		m.screen = screenChat
-		m.chat.ToggleThinking()
+		m.toggleThinking()
 		return nil
 	case commandShellMode:
+		m.returnScreen = ""
 		m.screen = screenChat
 		// Mirror the "!" intercept guard: only latch shell mode when the
 		// textarea is empty and nothing else is in flight. Silently
@@ -326,15 +331,18 @@ func (m *Model) dispatchPaletteCommand(cmd palette.Command) tea.Cmd {
 		}
 		return nil
 	case commandClearSession:
+		m.returnScreen = ""
 		m.screen = screenChat
 		m.cancelInsight()
 		m.resetInsightState()
 		m.chat.Clear()
 		return nil
 	case commandQuit:
+		m.returnScreen = ""
 		m.screen = screenChat
 		return m.openQuitDialog()
 	}
+	m.returnScreen = ""
 	m.screen = screenChat
 	return nil
 }
