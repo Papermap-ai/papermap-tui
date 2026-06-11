@@ -12,8 +12,6 @@ import (
 const (
 	defaultAPIURL      = "https://prod.dataapi.papermap.ai"
 	defaultFrontendURL = "https://papermap.ai"
-	apiURLEnvKey       = "PAPERMAP_API_URL"
-	frontendURLEnvKey  = "PAPERMAP_FRONTEND_URL"
 )
 
 type Config struct {
@@ -81,16 +79,8 @@ func LoadFromPaths(path string) (Config, error) {
 		}
 	}
 
-	if envURL := strings.TrimSpace(os.Getenv(apiURLEnvKey)); envURL != "" {
-		cfg.APIURL = envURL
-	}
-
 	if strings.TrimSpace(cfg.APIURL) == "" {
 		cfg.APIURL = defaultAPIURL
-	}
-
-	if envURL := strings.TrimSpace(os.Getenv(frontendURLEnvKey)); envURL != "" {
-		cfg.FrontendURL = envURL
 	}
 
 	if strings.TrimSpace(cfg.FrontendURL) == "" {

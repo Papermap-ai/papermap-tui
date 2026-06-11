@@ -104,9 +104,8 @@ missing.
 Configuration is loaded from, in precedence order:
 
 1. `--api-url` flag (root or `auth login`).
-2. `PAPERMAP_API_URL` environment variable.
-3. `~/.papermap/config.yaml`.
-4. Built-in default (see `internal/config`).
+2. `~/.papermap/config.yaml`.
+3. Built-in default (see `internal/config`).
 
 Cached workspace metadata lives in `~/.papermap/workspaces.json` and is
 cleared on logout.

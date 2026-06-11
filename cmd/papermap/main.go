@@ -48,8 +48,6 @@ Auth login flags:
       --frontend-url <url>    Override the Papermap web app base URL for this run
 
 Environment:
-  PAPERMAP_API_URL            Override the API base URL (same as --api-url)
-  PAPERMAP_FRONTEND_URL       Override the frontend base URL (same as --frontend-url)
   PAPERMAP_ALLOW_UNTRUSTED_FRONTEND
                                Allow non-production frontend hosts for browser login
   PAPERMAP_FORCE_FILE_STORE   Force file-based credential storage
@@ -119,12 +117,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	if apiURL != "" {
-		// Honored by internal/config.Load via PAPERMAP_API_URL.
-		_ = os.Setenv("PAPERMAP_API_URL", apiURL)
-	}
-
-	return app.Run()
+	return app.Run(app.RunOptions{APIURLOverride: apiURL})
 }
 
 func runAuth(args []string, stdout, stderr io.Writer) error {

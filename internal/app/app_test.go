@@ -20,6 +20,7 @@ import (
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/app"
 	"github.com/papermap/papermap-tui/internal/auth"
+	"github.com/papermap/papermap-tui/internal/config"
 	"github.com/papermap/papermap-tui/internal/ui/chat"
 )
 
@@ -82,9 +83,8 @@ func TestStartupWithValidCredentialsRoutesToChat(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	t.Setenv("PAPERMAP_API_URL", server.URL)
-
 	t.Setenv("HOME", t.TempDir())
+	useAPIURLConfig(t, server.URL)
 	store, err := auth.DefaultStore()
 	if err != nil {
 		t.Fatalf("DefaultStore returned error: %v", err)
@@ -118,7 +118,6 @@ func TestStartupWithValidCredentialsRoutesToChat(t *testing.T) {
 
 func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("PAPERMAP_API_URL", "")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -149,7 +148,7 @@ func TestStartupBestEffortWhenIncludedWorkspacesFails(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	t.Setenv("PAPERMAP_API_URL", server.URL)
+	useAPIURLConfig(t, server.URL)
 
 	store, err := auth.DefaultStore()
 	if err != nil {
@@ -240,7 +239,7 @@ func TestStartupRefreshesExpiredCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("PAPERMAP_API_URL", server.URL)
+	useAPIURLConfig(t, server.URL)
 
 	store, err := auth.DefaultStore()
 	if err != nil {
@@ -301,7 +300,7 @@ func TestStartupClearsExpiredCredentialsWhenRefreshFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("PAPERMAP_API_URL", server.URL)
+	useAPIURLConfig(t, server.URL)
 
 	store, err := auth.DefaultStore()
 	if err != nil {
@@ -433,7 +432,7 @@ func TestSubmitCreatesChatBeforeStartingInsight(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("PAPERMAP_API_URL", server.URL)
+	useAPIURLConfig(t, server.URL)
 
 	store, err := auth.DefaultStore()
 	if err != nil {
@@ -541,6 +540,14 @@ func startupForTest(t *testing.T, model app.Model) any {
 		t.Fatal("expected startupMsg from Init")
 	}
 	return msg
+}
+
+func useAPIURLConfig(t *testing.T, apiURL string) {
+	t.Helper()
+
+	if err := config.Save(config.Config{APIURL: apiURL}); err != nil {
+		t.Fatalf("Save config returned error: %v", err)
+	}
 }
 
 func jwtForTest(expiresAt time.Time) string {
