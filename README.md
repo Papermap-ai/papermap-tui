@@ -107,7 +107,7 @@ papermap [flags] [command]
 | `-v`, `--version`   | Print version, commit, and build date                        |
 | `-h`, `--help`      | Show help                                                    |
 | `-u`, `--user`      | Print the signed-in user (alias for `auth whoami`)           |
-| `--api-url <url>`   | Override the API base URL for this run (sets `PAPERMAP_API_URL`) |
+| `--api-url <url>`   | Override the API base URL for this run |
 
 ### Commands
 
@@ -147,13 +147,13 @@ to opt into `cmd.exe` instead.
 
 ## Configuration
 
-Configuration is loaded from `~/.papermap/config.yaml`. Environment variables take precedence.
+Configuration is loaded from `~/.papermap/config.yaml`. Built-in defaults are used when a value is missing or empty. Explicit CLI flags such as `--api-url` and `--frontend-url` override config for that run only.
 
-| Setting       | Config key      | Env var                        | Default                      |
-| ------------- | --------------- | ------------------------------ | ---------------------------- |
-| API URL       | `api_url`       | `PAPERMAP_API_URL`             | `https://prod.dataapi.papermap.ai` |
-| Frontend URL  | `frontend_url`  | `PAPERMAP_FRONTEND_URL`        | `https://papermap.ai`        |
-| Windows shell | `shell.windows` | —                              | `pwsh`                       |
+| Setting       | Config key      | Default                      |
+| ------------- | --------------- | ---------------------------- |
+| API URL       | `api_url`       | `https://prod.dataapi.papermap.ai` |
+| Frontend URL  | `frontend_url`  | `https://papermap.ai`        |
+| Windows shell | `shell.windows` | `pwsh`                       |
 
 Example `~/.papermap/config.yaml`:
 

@@ -9,8 +9,6 @@ import (
 func TestSaveLoadRoundtripPersistsSelectedModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	cfg := Config{
 		APIURL:        "https://custom.example",
@@ -35,8 +33,6 @@ func TestSaveLoadRoundtripPersistsSelectedModel(t *testing.T) {
 func TestSaveOmitsSelectedModelWhenEmpty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: "https://custom.example"}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -54,8 +50,6 @@ func TestSaveOmitsSelectedModelWhenEmpty(t *testing.T) {
 func TestSaveStripsDefaultAPIURL(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: defaultAPIURL, SelectedModel: "x"}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
@@ -92,8 +86,6 @@ func contains(haystack, needle string) bool {
 func TestLoadDefaultsShellWindowsPwsh(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	got, err := Load()
 	if err != nil {
@@ -104,11 +96,25 @@ func TestLoadDefaultsShellWindowsPwsh(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsURLsWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.APIURL != defaultAPIURL {
+		t.Fatalf("APIURL = %q, want %q", got.APIURL, defaultAPIURL)
+	}
+	if got.FrontendURL != defaultFrontendURL {
+		t.Fatalf("FrontendURL = %q, want %q", got.FrontendURL, defaultFrontendURL)
+	}
+}
+
 func TestLoadAcceptsShellWindowsCmd(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	dir := filepath.Join(home, ".papermap")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -131,8 +137,6 @@ func TestLoadAcceptsShellWindowsCmd(t *testing.T) {
 func TestLoadRejectsInvalidShellWindows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	dir := filepath.Join(home, ".papermap")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -151,8 +155,6 @@ func TestLoadRejectsInvalidShellWindows(t *testing.T) {
 func TestSaveStripsDefaultShellWindows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(apiURLEnvKey, "")
-	t.Setenv(frontendURLEnvKey, "")
 
 	if err := Save(Config{APIURL: defaultAPIURL, Shell: ShellConfig{Windows: ShellWindowsPwsh}}); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -163,5 +165,55 @@ func TestSaveStripsDefaultShellWindows(t *testing.T) {
 	}
 	if contains(string(data), "windows:") {
 		t.Fatalf("expected shell section to be stripped, got:\n%s", data)
+	}
+}
+
+func TestLoadUsesConfigFileURLs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(home, ".papermap")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	payload := []byte("api_url: https://api.example\nfrontend_url: https://app.example\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), payload, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.APIURL != "https://api.example" {
+		t.Fatalf("APIURL: got %q", got.APIURL)
+	}
+	if got.FrontendURL != "https://app.example" {
+		t.Fatalf("FrontendURL: got %q", got.FrontendURL)
+	}
+}
+
+func TestLoadIgnoresURLenvVars(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PAPERMAP_API_URL", "https://env-api.example")
+	t.Setenv("PAPERMAP_FRONTEND_URL", "https://env-app.example")
+
+	if err := Save(Config{
+		APIURL:      "https://config-api.example",
+		FrontendURL: "https://config-app.example",
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got.APIURL != "https://config-api.example" {
+		t.Fatalf("APIURL: got %q", got.APIURL)
+	}
+	if got.FrontendURL != "https://config-app.example" {
+		t.Fatalf("FrontendURL: got %q", got.FrontendURL)
 	}
 }

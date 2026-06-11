@@ -171,6 +171,7 @@ type Model struct {
 	height           int
 	screen           screen
 	config           config.Config
+	configLoaded     bool
 	authenticated    bool
 	workspaceName    string
 	workspaceID      string
@@ -237,7 +238,11 @@ type Model struct {
 	shellPath string
 }
 
-func Run() error {
+type RunOptions struct {
+	APIURLOverride string
+}
+
+func Run(opts RunOptions) error {
 	// Load config and resolve the "!" shell binary up front so an
 	// invalid shell.windows value (or a missing pwsh.exe when the
 	// user opted into PowerShell) fails before the TUI starts. This
@@ -246,6 +251,9 @@ func Run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if v := strings.TrimSpace(opts.APIURLOverride); v != "" {
+		cfg.APIURL = v
 	}
 	shellPath, err := resolveUserShell(cfg)
 	if err != nil {
@@ -256,6 +264,8 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	model.config = cfg
+	model.configLoaded = true
 	model.shellPath = shellPath
 
 	program := tea.NewProgram(model)
@@ -859,7 +869,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleEnter(), nil
 	case keySwitchWorkspace:
 		if m.authenticated && m.screen == screenChat {
-			m.openWorkspacePicker()
+			return m, m.openWorkspacePicker()
 		}
 		return m, nil
 	case keyClearChat:
@@ -1007,9 +1017,13 @@ func (m *Model) quitWithCancel() tea.Cmd {
 
 func (m Model) loadStartup() tea.Cmd {
 	return func() tea.Msg {
-		cfg, err := config.Load()
-		if err != nil {
-			return startupMsg{err: err}
+		cfg := m.config
+		if !m.configLoaded {
+			loaded, err := config.Load()
+			if err != nil {
+				return startupMsg{err: err}
+			}
+			cfg = loaded
 		}
 
 		client, err := api.NewClient(cfg.APIURL, nil, m.store)

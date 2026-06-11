@@ -82,10 +82,8 @@ func (m Model) handleShellResult(msg shellResultMsg) Model {
 }
 
 // scrubChildEnv removes PAPERMAP_* variables from the environment we
-// hand to the spawned shell. The TUI process can carry an API URL
-// override (PAPERMAP_API_URL) plus future auth-shaped vars; none of
-// those should leak into a user-typed `! env` or any process the
-// command spawns.
+// hand to the spawned shell. Papermap-shaped vars should not leak into
+// a user-typed `! env` or any process the command spawns.
 func scrubChildEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
