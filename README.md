@@ -67,7 +67,7 @@ papermap auth login
 papermap
 ```
 
-`auth login` writes credentials to `~/.papermap/credentials` (mode `0600`). Subsequent launches restore your session automatically and refresh tokens as needed.
+`auth login` writes credentials to the OS keychain when available. In headless or unsupported environments it falls back to `~/.papermap/credentials` (mode `0600`). Subsequent launches restore your session automatically and refresh tokens as needed.
 
 ### Manage workspaces from the CLI
 
@@ -114,7 +114,7 @@ papermap [flags] [command]
 | Command                | Description                                                                  |
 | ---------------------- | ---------------------------------------------------------------------------- |
 | _(none)_               | Launch the TUI                                                               |
-| `auth login`           | Sign in with email + password                                                |
+| `auth login`           | Sign in with browser login by default, or email + password with `--password` |
 | `auth logout`          | Clear stored credentials and workspace cache                                 |
 | `auth whoami`          | Print the currently signed-in user                                           |
 | `workspace create`     | Create a database-backed workspace (Postgres, MySQL, MongoDB, Supabase)      |
@@ -147,7 +147,7 @@ to opt into `cmd.exe` instead.
 
 ## Configuration
 
-Configuration is loaded from `~/.papermap/config.yaml`. Built-in defaults are used when a value is missing or empty. Explicit CLI flags such as `--api-url` and `--frontend-url` override config for that run only.
+Configuration is loaded from `~/.papermap/config.yaml`, which is created on first run if missing. Built-in defaults are used when a value is missing or empty. Explicit CLI flags such as `--api-url` and `--frontend-url` override config for that run only.
 
 | Setting       | Config key      | Default                           |
 | ------------- | --------------- | --------------------------------- |

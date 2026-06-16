@@ -7,7 +7,24 @@ before:
     - go mod tidy
 
 builds:
-  - id: papermap
+  - id: papermap-darwin
+    main: ./cmd/papermap
+    binary: papermap
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+  - id: papermap-linux
     main: ./cmd/papermap
     binary: papermap
     env:
@@ -20,7 +37,6 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
     goos:
-      - darwin
       - linux
     goarch:
       - amd64
