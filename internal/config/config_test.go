@@ -43,6 +43,23 @@ func TestLoadDefaultsShowThinkingOff(t *testing.T) {
 	}
 }
 
+func TestLoadCreatesDefaultConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(home, ".papermap", "config.yaml"))
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config permissions = %v, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestSaveLoadRoundtripPersistsShowThinking(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

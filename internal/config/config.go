@@ -70,12 +70,14 @@ func Load() (Config, error) {
 
 func LoadFromPaths(path string) (Config, error) {
 	cfg := Default()
+	missing := false
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return Config{}, fmt.Errorf("read config file: %w", err)
 		}
+		missing = true
 	} else if len(data) > 0 {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, fmt.Errorf("decode config file: %w", err)
@@ -97,6 +99,11 @@ func LoadFromPaths(path string) (Config, error) {
 	}
 	if err := validateShellWindows(cfg.Shell.Windows); err != nil {
 		return Config{}, err
+	}
+	if missing {
+		if err := saveConfigTo(path, cfg); err != nil {
+			return Config{}, err
+		}
 	}
 
 	return cfg, nil
