@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.0...v0.8.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **auth:** restore Keychain credential storage ([12c4da6](https://github.com/Papermap-ai/papermap-tui/commit/12c4da611ad6162bbc21c62b1fe19e3c7e592c0f))
+* **auth:** restore Keychain credential storage ([2e8bb28](https://github.com/Papermap-ai/papermap-tui/commit/2e8bb28dec4469aca6ee57fe6f721fa11dd79eb0))
+
 ## [0.8.0](https://github.com/Papermap-ai/papermap-tui/compare/v0.7.2...v0.8.0) (2026-06-11)
 
 
