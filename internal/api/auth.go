@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,6 +42,22 @@ type responseEnvelope[T any] struct {
 	Success    bool   `json:"success"`
 	StatusCode int    `json:"status_code"`
 	Data       T      `json:"data"`
+}
+
+type responseError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *responseError) Error() string {
+	return fmt.Sprintf("api request failed: %s", e.Message)
+}
+
+// IsUnauthorized reports whether err came from a 401 API response.
+func IsUnauthorized(err error) bool {
+	var responseErr *responseError
+	return errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusUnauthorized
 }
 
 func (t AuthTokens) ToCredentials(existing auth.Credentials) (auth.Credentials, error) {
@@ -214,7 +231,7 @@ func checkResponseStatus(statusCode int, status string, body []byte) error {
 		message = status
 	}
 
-	return fmt.Errorf("api request failed: %s", message)
+	return &responseError{StatusCode: statusCode, Status: status, Message: message}
 }
 
 func extractResponseMessage(body []byte) string {

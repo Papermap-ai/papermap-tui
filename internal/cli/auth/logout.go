@@ -39,7 +39,7 @@ func RunLogout(ctx context.Context, w io.Writer) error {
 				if clearErr := store.Clear(); clearErr != nil {
 					return fmt.Errorf("clear credentials: %w", clearErr)
 				}
-				_, _ = fmt.Fprintln(w, "Logged out locally. Remote logout failed.")
+				_, _ = fmt.Fprintln(w, "Logged out locally.")
 				return nil
 			}
 		}
