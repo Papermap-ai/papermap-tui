@@ -438,12 +438,60 @@ func TestStartupClearsExpiredCredentialsWhenRefreshFails(t *testing.T) {
 	_ = cmd
 
 	view := updated.(app.Model).View().Content
-	if !strings.Contains(view, "Focused terminal access to Papermap Data Platform") {
-		t.Fatalf("expected landing view after failed refresh, got %q", view)
+	if !strings.Contains(view, "Your saved session is no longer valid") {
+		t.Fatalf("expected invalid-session landing after failed refresh, got %q", view)
+	}
+	if strings.Contains(view, "Startup error:") {
+		t.Fatalf("expected startup error to stay inside landing copy, got %q", view)
 	}
 
 	if _, err := os.Stat(filepath.Join(home, ".papermap", "credentials")); !os.IsNotExist(err) {
 		t.Fatalf("expected credentials file removed after failed refresh, got err=%v", err)
+	}
+}
+
+func TestStartupClearsRevokedCredentialsWhenWorkspaceUnauthorized(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"invalid credentials"}`))
+	}))
+	defer server.Close()
+
+	useAPIURLConfig(t, server.URL)
+
+	store, err := auth.DefaultStore()
+	if err != nil {
+		t.Fatalf("DefaultStore returned error: %v", err)
+	}
+
+	if err := store.Save(auth.Credentials{
+		AccessToken:  jwtForTest(time.Now().Add(time.Hour)),
+		RefreshToken: "refresh-token",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	model, err := app.NewModel()
+	if err != nil {
+		t.Fatalf("NewModel returned error: %v", err)
+	}
+
+	updated, cmd := model.Update(startupForTest(t, model))
+	_ = cmd
+
+	view := updated.(app.Model).View().Content
+	if !strings.Contains(view, "Your saved session is no longer valid") {
+		t.Fatalf("expected invalid-session landing after unauthorized workspace, got %q", view)
+	}
+	if strings.Contains(view, "Startup error:") {
+		t.Fatalf("expected no top-level startup error, got %q", view)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".papermap", "credentials")); !os.IsNotExist(err) {
+		t.Fatalf("expected credentials file removed after unauthorized workspace, got err=%v", err)
 	}
 }
 

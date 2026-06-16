@@ -21,10 +21,15 @@ func NewModel() Model {
 // guidance pointing the user at `papermap auth login`.
 func (Model) View(th theme.Theme, width int, message string) string {
 	panelWidth := clampWidth(width, 62)
+	contentWidth := panelWidth - 4
+	if contentWidth < 20 {
+		contentWidth = panelWidth
+	}
 
 	centerInPanel := func(rendered string) string {
 		return lipgloss.PlaceHorizontal(panelWidth, lipgloss.Center, rendered)
 	}
+	messageStyle := th.Body.Width(contentWidth).Align(lipgloss.Center)
 
 	body := strings.TrimSpace(message)
 	var panelLines []string
@@ -38,11 +43,11 @@ func (Model) View(th theme.Theme, width int, message string) string {
 		}
 	} else {
 		panelLines = []string{
-			centerInPanel(th.Body.Render(body)),
+			centerInPanel(messageStyle.Render(body)),
 			"",
-			centerInPanel(th.Accent.Render("Run `papermap auth login` to continue")),
+			centerInPanel(th.Accent.Render("Run `papermap auth login` to sign in again")),
 			"",
-			centerInPanel(th.KeyHint.Render("Any key quit")),
+			centerInPanel(th.KeyHint.Render("Ctrl+C quit")),
 		}
 	}
 

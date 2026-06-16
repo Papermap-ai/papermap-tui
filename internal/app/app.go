@@ -47,11 +47,14 @@ const (
 	minTerminalHeight = 20
 )
 
+const invalidSessionLandingMessage = "Your saved session is no longer valid."
+
 type startupMsg struct {
-	config        config.Config
-	authenticated bool
-	client        *api.Client
-	workspace     *api.UnifiedWorkspace
+	config         config.Config
+	authenticated  bool
+	client         *api.Client
+	workspace      *api.UnifiedWorkspace
+	landingMessage string
 	// models carries the available LLM choices for the current user.
 	// May be nil when the fetch failed; the app falls back to a single
 	// synthetic choice based on the persisted slug or the hardcoded
@@ -417,7 +420,14 @@ func (m Model) handleStartup(msg startupMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	m.landingMessage = "You're not signed in to Papermap."
+	if msg.landingMessage != "" {
+		m.landingMessage = msg.landingMessage
+	} else if msg.err != nil {
+		m.landingMessage = "Papermap could not finish startup: " + msg.err.Error()
+	} else {
+		m.landingMessage = "You're not signed in to Papermap."
+	}
+	m.startupErr = nil
 	m.screen = screenLanding
 	return m, nil
 }
@@ -891,7 +901,7 @@ func (m Model) View() tea.View {
 	}
 
 	content := m.viewScreen()
-	if m.startupErr != nil {
+	if m.startupErr != nil && m.screen != screenLanding {
 		content = strings.Join([]string{
 			m.theme.Error.Render("Startup error: " + m.startupErr.Error()),
 			"",
@@ -1034,13 +1044,18 @@ func (m Model) loadStartup() tea.Cmd {
 		// on demand once the session is live.
 		m.store.SetRefresher(newRefresher(client, m.store))
 
-		authenticated, err := m.restoreSession(context.Background(), client)
+		authenticated, landingMessage, err := m.restoreSession(context.Background(), client)
 		if err != nil {
 			return startupMsg{config: cfg, client: client, err: err}
 		}
 
 		workspace, err := loadUnifiedWorkspaceContext(context.Background(), client)
 		if err != nil && authenticated {
+			if api.IsUnauthorized(err) {
+				_ = m.store.Clear()
+				_ = config.ClearWorkspaces()
+				return startupMsg{config: cfg, client: client, landingMessage: invalidSessionLandingMessage}
+			}
 			return startupMsg{config: cfg, authenticated: authenticated, client: client, err: err}
 		}
 
@@ -1056,55 +1071,58 @@ func (m Model) loadStartup() tea.Cmd {
 		}
 
 		return startupMsg{
-			config:        cfg,
-			authenticated: authenticated,
-			client:        client,
-			workspace:     workspace,
-			models:        models,
-			defModel:      defModel,
+			config:         cfg,
+			authenticated:  authenticated,
+			client:         client,
+			workspace:      workspace,
+			landingMessage: landingMessage,
+			models:         models,
+			defModel:       defModel,
 		}
 	}
 }
 
-func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, error) {
+func (m Model) restoreSession(ctx context.Context, client *api.Client) (bool, string, error) {
 	cred, err := m.store.Load()
 	switch {
 	case err == nil:
 		if cred.Valid() {
-			return true, nil
+			return true, "", nil
 		}
 
 		if strings.TrimSpace(cred.RefreshToken) == "" {
 			if err := m.store.Clear(); err != nil {
-				return false, err
+				return false, "", err
 			}
-			return false, nil
+			return false, invalidSessionLandingMessage, nil
 		}
 
 		refreshed, err := client.Refresh(ctx, cred.RefreshToken)
 		if err != nil {
 			if clearErr := m.store.Clear(); clearErr != nil {
-				return false, clearErr
+				return false, "", clearErr
 			}
-			return false, nil
+			return false, invalidSessionLandingMessage, nil
 		}
 
 		updatedCred, err := refreshed.ToCredentials(cred)
 		if err != nil {
-			return false, err
+			_ = m.store.Clear()
+			return false, invalidSessionLandingMessage, nil
 		}
 
 		if err := m.store.Save(updatedCred); err != nil {
-			return false, err
+			return false, "", err
 		}
 
-		return true, nil
+		return true, "", nil
 
 	case errors.Is(err, auth.ErrNoCredentials):
-		return false, nil
+		return false, "", nil
 
 	default:
-		return false, err
+		_ = m.store.Clear()
+		return false, invalidSessionLandingMessage, nil
 	}
 }
 
