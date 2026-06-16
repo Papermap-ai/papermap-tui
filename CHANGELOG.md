@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.1...v0.8.2) (2026-06-16)
+
+
+### Bug Fixes
+
+* **app:** tidy invalid session startup ([2cd3cc7](https://github.com/Papermap-ai/papermap-tui/commit/2cd3cc778e98b87c7463adde4d5343e877694969))
+* **app:** tidy invalid session startup ([5013db2](https://github.com/Papermap-ai/papermap-tui/commit/5013db24bdee3117a7677aa9d680cf0182f713b3))
+
 ## [0.8.1](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.0...v0.8.1) (2026-06-16)
 
 
