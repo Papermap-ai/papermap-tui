@@ -17,6 +17,14 @@ type TokenSource interface {
 	AccessToken(ctx context.Context) (string, error)
 }
 
+// refresherTokenSource is an optional capability a TokenSource may implement.
+// When the backend rejects a token the client still considers valid, the
+// client calls ForceRefresh to mint a new one and replays the request once.
+// TokenStore implements this; simple test stubs can omit it.
+type refresherTokenSource interface {
+	ForceRefresh(ctx context.Context) (string, error)
+}
+
 type Client struct {
 	baseURL     *url.URL
 	httpClient  *http.Client
@@ -120,6 +128,12 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized && req.Header.Get("Authorization") != "" {
+		if retried, retryErr, ok := c.retryOn401(req, resp); ok {
+			return retried, retryErr
+		}
+	}
+
 	return resp, nil
 }
 
@@ -132,5 +146,64 @@ func (c *Client) DoStream(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("send stream request: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized && req.Header.Get("Authorization") != "" {
+		if retried, retryErr, ok := c.retryOn401(req, resp); ok {
+			return retried, retryErr
+		}
+	}
+
 	return resp, nil
+}
+
+// retryOn401 mints a fresh access token via the token source's optional
+// ForceRefresh capability and replays req once. The bool return is true when
+// the retry path ran (regardless of success); when false the caller falls
+// through with the original 401 response. On refresh failure the returned
+// error wraps auth.ErrSessionExpired so the app routes to the session-expired
+// flow instead of surfacing a stale 401.
+func (c *Client) retryOn401(req *http.Request, resp *http.Response) (*http.Response, error, bool) {
+	refresher, ok := c.tokenSource.(refresherTokenSource)
+	if !ok || refresher == nil {
+		return resp, nil, false
+	}
+
+	token, err := refresher.ForceRefresh(req.Context())
+	if err != nil {
+		_ = resp.Body.Close()
+		return nil, err, true
+	}
+
+	replayed, err := replayRequest(c.httpClient, req, token)
+	if err != nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("replay after refresh: %w", err), true
+	}
+
+	_ = resp.Body.Close()
+	return replayed, nil, true
+}
+
+// replayRequest rebuilds req for one-shot retry: it re-reads the body via
+// req.GetBody (set by http.NewRequestWithContext for byte buffers, nil for
+// GET bodies), swaps the Authorization header for the refreshed token, and
+// drops req from its previous transport via an isolated client clone.
+func replayRequest(base *http.Client, req *http.Request, token string) (*http.Response, error) {
+	var body io.ReadCloser
+	if req.GetBody != nil {
+		rb, err := req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("replay request body: %w", err)
+		}
+		body = io.NopCloser(rb)
+	} else if req.Body != nil {
+		// Body already consumed and no GetBody; cannot replay safely.
+		return nil, fmt.Errorf("request body is not replayable")
+	}
+
+	clone := *req
+	clone.Body = body
+	clone.Header = req.Header.Clone()
+	clone.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+
+	return base.Do(&clone)
 }
