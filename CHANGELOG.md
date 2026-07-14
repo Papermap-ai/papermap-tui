@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.3](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.2...v0.8.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* **api:** retry on 401 via forced token refresh ([9ffd0ec](https://github.com/Papermap-ai/papermap-tui/commit/9ffd0ec0e154fd0f42808840c4d47b5de7647213))
+* **api:** retry on 401 via forced token refresh ([cef65c6](https://github.com/Papermap-ai/papermap-tui/commit/cef65c6994e5c3ae6377e4f58291b150a9a9d1ab))
+
 ## [0.8.2](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.1...v0.8.2) (2026-06-16)
 
 
