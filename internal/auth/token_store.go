@@ -160,6 +160,46 @@ func (s *TokenStore) AccessToken(ctx context.Context) (string, error) {
 	return refreshed.AccessToken, nil
 }
 
+// ForceRefresh exchanges the stored refresh token for a fresh access token
+// regardless of the current token's local expiry. The api client uses this to
+// recover when the backend rejects an access token the client still considers
+// valid (clock skew, server-side invalidation, rotation). On refresh failure
+// it clears credentials and returns ErrSessionExpired so the caller can route
+// the user back to login.
+func (s *TokenStore) ForceRefresh(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cred, err := s.backend.Load()
+	if err != nil {
+		if errors.Is(err, ErrNoCredentials) {
+			return "", ErrSessionExpired
+		}
+		return "", err
+	}
+
+	if s.refresher == nil || cred.RefreshToken == "" {
+		_ = s.backend.Clear()
+		return "", ErrSessionExpired
+	}
+
+	refreshed, err := s.refresher.Refresh(ctx, cred.RefreshToken)
+	if err != nil {
+		_ = s.backend.Clear()
+		return "", fmt.Errorf("%w: %v", ErrSessionExpired, err)
+	}
+
+	if refreshed.User == (User{}) {
+		refreshed.User = cred.User
+	}
+
+	if err := s.backend.Save(refreshed); err != nil {
+		return "", err
+	}
+
+	return refreshed.AccessToken, nil
+}
+
 // Load returns the persisted credentials, or the zero value plus
 // ErrNoCredentials when nothing is stored. The zero-value-on-missing path
 // makes it easy to branch on "are we logged in" without unwrapping.

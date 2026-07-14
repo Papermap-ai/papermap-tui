@@ -1051,7 +1051,7 @@ func (m Model) loadStartup() tea.Cmd {
 
 		workspace, err := loadUnifiedWorkspaceContext(context.Background(), client)
 		if err != nil && authenticated {
-			if api.IsUnauthorized(err) {
+			if errors.Is(err, auth.ErrSessionExpired) || api.IsUnauthorized(err) {
 				_ = m.store.Clear()
 				_ = config.ClearWorkspaces()
 				return startupMsg{config: cfg, client: client, landingMessage: invalidSessionLandingMessage}
