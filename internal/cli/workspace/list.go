@@ -51,7 +51,7 @@ func RunList(ctx context.Context, w io.Writer, opts ListOptions) error {
 	if err != nil {
 		return fmt.Errorf("build api client: %w", err)
 	}
-	store.SetRefresher(api.NewRefresher(client, store))
+	store.SetRefresher(api.NewRefresher(client))
 
 	return runListWith(ctx, w, ListDeps{List: client.ListWorkspaces})
 }

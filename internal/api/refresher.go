@@ -13,14 +13,12 @@ import (
 // without importing each other.
 type refresherAdapter struct {
 	client *Client
-	store  *auth.TokenStore
 }
 
-// NewRefresher returns an auth.Refresher backed by the given client and
-// store. Wire the result into the store with store.SetRefresher so
-// AccessToken can lazily refresh expired access tokens.
-func NewRefresher(client *Client, store *auth.TokenStore) auth.Refresher {
-	return &refresherAdapter{client: client, store: store}
+// NewRefresher returns an auth.Refresher backed by the given client. Wire the
+// result into a token store so AccessToken can lazily refresh expired tokens.
+func NewRefresher(client *Client) auth.Refresher {
+	return &refresherAdapter{client: client}
 }
 
 // Refresh exchanges the given refresh token for a fresh set of
@@ -36,8 +34,7 @@ func (r *refresherAdapter) Refresh(ctx context.Context, refreshToken string) (au
 		return auth.Credentials{}, err
 	}
 
-	existing, _ := r.store.Load()
-	cred, err := tokens.ToCredentials(existing)
+	cred, err := tokens.ToCredentials(auth.Credentials{})
 	if err != nil {
 		return auth.Credentials{}, err
 	}
