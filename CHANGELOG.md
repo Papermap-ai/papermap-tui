@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.4](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.3...v0.8.4) (2026-07-17)
+
+
+### Bug Fixes
+
+* **api:** prevent token refresh deadlock ([780f14f](https://github.com/Papermap-ai/papermap-tui/commit/780f14f8e1f465b7b20d12f369ec19a933f7d7ed))
+* **api:** prevent token refresh deadlock ([8a6e1ce](https://github.com/Papermap-ai/papermap-tui/commit/8a6e1cebbeb1cad3a800a430dc868fc5715d9727))
+
 ## [0.8.3](https://github.com/Papermap-ai/papermap-tui/compare/v0.8.2...v0.8.3) (2026-07-14)
 
 
