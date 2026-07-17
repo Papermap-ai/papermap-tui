@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/papermap/papermap-tui/internal/api"
 	"github.com/papermap/papermap-tui/internal/auth"
@@ -132,6 +133,7 @@ func TestDoStreamRetriesOn401AfterRefresh(t *testing.T) {
 			_, _ = w.Write([]byte(`{"message":"token expired"}`))
 			return
 		}
+		time.Sleep(150 * time.Millisecond)
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "event: phase_update\n")
@@ -148,7 +150,9 @@ func TestDoStreamRetriesOn401AfterRefresh(t *testing.T) {
 		refreshed: "fresh-token",
 	}
 
-	client, err := api.NewClient(server.URL, server.Client(), ts)
+	httpClient := server.Client()
+	httpClient.Timeout = 50 * time.Millisecond
+	client, err := api.NewClient(server.URL, httpClient, ts)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

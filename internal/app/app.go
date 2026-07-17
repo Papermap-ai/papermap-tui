@@ -1042,7 +1042,7 @@ func (m Model) loadStartup() tea.Cmd {
 
 		// Wire up the refresher so the token store can refresh access tokens
 		// on demand once the session is live.
-		m.store.SetRefresher(newRefresher(client, m.store))
+		m.store.SetRefresher(newRefresher(client))
 
 		authenticated, landingMessage, err := m.restoreSession(context.Background(), client)
 		if err != nil {

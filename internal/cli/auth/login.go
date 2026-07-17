@@ -85,7 +85,7 @@ func alreadySignedIn(ctx context.Context, opts LoginOptions) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	store.SetRefresher(api.NewRefresher(client, store))
+	store.SetRefresher(api.NewRefresher(client))
 
 	token, err := store.AccessToken(ctx)
 	if err != nil || token == "" {

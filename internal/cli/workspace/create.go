@@ -80,7 +80,7 @@ func RunCreate(ctx context.Context, w io.Writer, opts CreateOptions) error {
 	if err != nil {
 		return fmt.Errorf("build api client: %w", err)
 	}
-	store.SetRefresher(api.NewRefresher(client, store))
+	store.SetRefresher(api.NewRefresher(client))
 
 	deps := CreateDeps{
 		Create: client.CreateWorkspace,

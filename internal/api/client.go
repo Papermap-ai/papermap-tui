@@ -129,7 +129,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized && req.Header.Get("Authorization") != "" {
-		if retried, retryErr, ok := c.retryOn401(req, resp); ok {
+		if retried, retryErr, ok := c.retryOn401(c.httpClient, req, resp); ok {
 			return retried, retryErr
 		}
 	}
@@ -147,7 +147,7 @@ func (c *Client) DoStream(req *http.Request) (*http.Response, error) {
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized && req.Header.Get("Authorization") != "" {
-		if retried, retryErr, ok := c.retryOn401(req, resp); ok {
+		if retried, retryErr, ok := c.retryOn401(&streamClient, req, resp); ok {
 			return retried, retryErr
 		}
 	}
@@ -161,7 +161,7 @@ func (c *Client) DoStream(req *http.Request) (*http.Response, error) {
 // through with the original 401 response. On refresh failure the returned
 // error wraps auth.ErrSessionExpired so the app routes to the session-expired
 // flow instead of surfacing a stale 401.
-func (c *Client) retryOn401(req *http.Request, resp *http.Response) (*http.Response, error, bool) {
+func (c *Client) retryOn401(httpClient *http.Client, req *http.Request, resp *http.Response) (*http.Response, error, bool) {
 	refresher, ok := c.tokenSource.(refresherTokenSource)
 	if !ok || refresher == nil {
 		return resp, nil, false
@@ -173,7 +173,7 @@ func (c *Client) retryOn401(req *http.Request, resp *http.Response) (*http.Respo
 		return nil, err, true
 	}
 
-	replayed, err := replayRequest(c.httpClient, req, token)
+	replayed, err := replayRequest(httpClient, req, token)
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("replay after refresh: %w", err), true
